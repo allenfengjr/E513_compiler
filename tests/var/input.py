@@ -1,3 +1,2 @@
-x = input_int()
-y = input_int()
-print(x+y)
+x = 1734283728332
+print(x)

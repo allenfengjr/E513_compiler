@@ -2,12 +2,12 @@
 main:
     pushq %rbp
     movq %rsp, %rbp
-    subq $0, %rsp
-    callq read_int
+    subq $16, %rsp
+    movq $1734283728332, %rax
     movq %rax, -8(%rbp)
-    movq -8(%rbp), %rax
-    movq %rax, -16(%rbp)
-    addq $0, %rsp
+    movq -8(%rbp), %rdi
+    callq print_int
+    addq $16, %rsp
     popq %rbp
     retq 
 
