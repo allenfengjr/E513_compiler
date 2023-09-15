@@ -270,7 +270,7 @@ class Compiler:
         res = []
         for s in ss:
             instr_res = self.patch_instr(s)
-            print(f"instr is {s}, patched instrs are {instr_res}")
+            # print(f"instr is {s}, patched instrs are {instr_res}")
             res += instr_res
         return res
 
@@ -331,10 +331,12 @@ class Compiler:
 
         return X86Program(new_body)
 
-    # challenge, exercise 2.7
+    # challenge, exercise 2.7, I edit the `pe_exp` and `pe_stmt`, to make it apply L_var
     '''
     def pe_exp(e):
         match e:
+            case Name(id): # Add varibale
+                return e
             case BinOp(left, Add(), right):
                 return pe_add(pe_exp(left), pe_exp(right))
             case BinOp(left, Sub(), right):
@@ -343,10 +345,13 @@ class Compiler:
                 return pe_neg(pe_exp(v))
             case Constant(value):
                 return e
-            case Call(Name('input_int'), []):
+            case Call(Name('input_int'), []):  
                 return e
+
     def pe_stmt(s):
         match s:
+            case Assign(Name(id), value):  # Add variable assignment
+                return Assign(Name(id), pe_exp(value))
             case Expr(Call(Name('print'), [arg])):
                 return Expr(Call(Name('print'), [pe_exp(arg)]))
             case Expr(value):
