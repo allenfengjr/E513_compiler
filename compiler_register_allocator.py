@@ -52,6 +52,7 @@ class Compiler(compiler.Compiler):
     def allocate_registers(self, p: X86Program,
                            graph: UndirectedAdjList) -> X86Program:
         # YOUR CODE HERE
+        p.callee_saved_register = [] # record all callee_saved_register need to be saved
         pass
 
     ############################################################################
@@ -227,16 +228,17 @@ class Compiler(compiler.Compiler):
                 new_body[label] = prelude + instrs + conclusion          
         else:  
             # If we have a single main function
-            # I do not think we need to consider callee-register now
-            # even if we do need to handle this, this should be at `patch_instructions` func
+            # In this assignment, we need to only deal with the call of `main` function
+            # we can only store the necessary callee-save registers, or all of them
+            callee_save_reg = ["rbx", "r12", "r13" ,"r14"]
             prelude = [
                 Instr("pushq", [Reg("rbp")]),
                 Instr("movq", [Reg("rsp"), Reg("rbp")]),
-                Instr("subq", [Immediate(p.stack_space), Reg("rsp")])
+                Instr("subq", [Immediate(p.stack_space + 4), Reg("rsp")])
             ]
             
             conclusion = [
-                Instr("addq", [Immediate(p.stack_space), Reg("rsp")]),
+                Instr("addq", [Immediate(p.stack_space + 4), Reg("rsp")]),
                 Instr("popq", [Reg("rbp")]),
                 Instr("retq", [])
             ]
