@@ -4,7 +4,7 @@ from typing import List, Tuple, Set, Dict
 from ast import *
 from x86_ast import *
 from typing import Set, Dict, Tuple
-
+from queue import *
 # Skeleton code for the chapter on Register Allocation
 
 class Compiler(compiler.Compiler):
@@ -115,7 +115,12 @@ class Compiler(compiler.Compiler):
     ############################################################################
     # Allocate Registers
     ############################################################################
-
+    def callee_saved_reg(self, variable: location) -> bool:
+        callee_saved = {"rbx", "r12", "r13", "r14"}
+        if isinstance(variable, Reg) and variable.id in callee_saved:
+            return True
+        return False
+    
     # Returns the coloring and the set of spilled variables.
     def color_graph(self, graph: UndirectedAdjList,
                     variables: Set[location]) -> Tuple[Dict[location, int], Set[location]]:
@@ -148,7 +153,6 @@ class Compiler(compiler.Compiler):
     def allocate_registers(self, p: X86Program,
                            graph: UndirectedAdjList) -> X86Program:
         # YOUR CODE HERE
-        p.callee_saved_register = [] # record all callee_saved_register need to be saved
         # Use color_graph to obtain variable-to-color mapping
         variables = set()
         for instr in p.body:
@@ -161,16 +165,19 @@ class Compiler(compiler.Compiler):
             4: 'r8', 5: 'r9', 6: 'r10', 7: 'rbx',
             8: 'r12', 9: 'r13', 10: 'r14'
         }
-
+        # Record callee-saved register
+        p.callee_saved_register = {}
         # Replace variables with registers based on the color assignment
         for instr in p.body:
             for arg in [instr.source, instr.target]:
                 if arg and isinstance(arg, Variable):
-                    color = cor_assignment.get(arg.id)
+                    color = color_assignment.get(arg.id)
                     if color is not None:
                         register_name = register_mapping.get(color)
                         if register_name:
                             arg.id = register_name  # Replace the variable with the corresponding register
+                            if self.callee_saved_reg(register_name):
+                                p.callee_saved_register.add(register_name)
         return p
         pass
 
@@ -218,7 +225,8 @@ class Compiler(compiler.Compiler):
                         color_assignment[u.id] = v_color
                     elif not interference_graph.has_edge(v, u):
                         color_assignment[v.id] = u_color
-
+        
+        
         return p
     '''
     ############################################################################
@@ -303,7 +311,7 @@ class Compiler(compiler.Compiler):
                     home[x] = self.gen_stack_access(i)
                 body = self.assign_homes_instrs(body, home)
                 pseudo_x86 = X86Program(body)
-                pseudo_x86.stack_space = align(8 * len(variables), 16)
+                pseudo_x86.stack_space = align(8 * (len(variables) + len(pseudo_x86.callee_saved_register)), 16)
                 return pseudo_x86
 
     ###########################################################################
@@ -362,7 +370,10 @@ class Compiler(compiler.Compiler):
         else:
             patched_instrs = self.patch_instrs(p.body)
         new_x86_program = X86Program(patched_instrs)
+        # is there possible to remove a register and leave it not use?
+        # if so, we may need to change the stack_space?
         new_x86_program.stack_space = p.stack_space
+        new_x86_program.callee_saved_register = p.callee_saved_register
         return new_x86_program
 
     ###########################################################################
@@ -394,17 +405,28 @@ class Compiler(compiler.Compiler):
                 new_body[label] = prelude + instrs + conclusion          
         else:  
             # If we have a single main function
-            # In this assignment, we need to only deal with the call of `main` function
-            # we can only store the necessary callee-save registers, or all of them
-            callee_save_reg = ["rbx", "r12", "r13" ,"r14"]
+            starting_offset = 8 * len(p.callee_saved_register) - p.stack_space
             prelude = [
                 Instr("pushq", [Reg("rbp")]),
                 Instr("movq", [Reg("rsp"), Reg("rbp")]),
-                Instr("subq", [Immediate(p.stack_space + 4), Reg("rsp")])
+                Instr("subq", [Immediate(p.stack_space), Reg("rsp")])
             ]
+            # Loop through the callee-saved registers to save them
+            for reg in p.callee_saved_register:
+                prelude.append(Instr("movq", [Reg(reg), Deref("rbp", starting_offset)]))
+                starting_offset -= 8
+            conclusion = []
+
+            # Reset starting offset for restoration of callee-saved registers
+            starting_offset = 8 * len(p.callee_saved_register) - p.stack_space
+
+            # Loop through the callee-saved registers to restore them
+            for reg in p.callee_saved_register:
+                conclusion.append(Instr("movq", [Deref("rbp", starting_offset), Reg(reg)]))
+                starting_offset -= 8
             
-            conclusion = [
-                Instr("addq", [Immediate(p.stack_space + 4), Reg("rsp")]),
+            conclusion.extend[
+                Instr("addq", [Immediate(p.stack_space), Reg("rsp")]),
                 Instr("popq", [Reg("rbp")]),
                 Instr("retq", [])
             ]
