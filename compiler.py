@@ -329,30 +329,23 @@ class Compiler:
         p.callee_saved_register = set()
         
         for instr in p.body:
-            if isinstance(instr, Callq):
-                # Handle Callq instruction separately
-                for i, arg in enumerate(instr.func.args):
-                    if isinstance(arg, Variable):
-                        color_set = color_assignment.get(arg.id, set())
-                        if color_set:
-                            color = min(color_set)  # choose the smallest color
-                            register_name = register_mapping.get(color)
-                            if register_name:
-                                instr.func.args[i] = Reg(register_name)  # Replace the variable with the corresponding register
-                                if self.callee_saved_reg(register_name):
-                                    p.callee_saved_register.add(register_name)
-            else:
-                # For other instructions, replace variables with registers
-                for arg in [arg for arg in [instr.source(), instr.target()] if arg is not None]:
-                    if isinstance(arg, Variable):
-                        color_set = color_assignment.get(arg.id, set())
-                        if color_set:
-                            color = min(color_set)  # choose the smallest color
-                            register_name = register_mapping.get(color)
-                            if register_name:
-                                arg.id = register_name  # Replace the variable with the corresponding register
-                                if self.callee_saved_reg(register_name):
-                                    p.callee_saved_register.add(register_name)
+            match instr:
+                case Callq("print_int", 1):
+                    pass
+                case Callq("input_int", 0):
+                    pass
+                case Instr(ins, [source, target]):
+                    # For other instructions, replace variables with registers
+                    for arg in [arg for arg in [source, target] if arg is not None]:
+                        if isinstance(arg, Variable):
+                            color_set = color_assignment.get(arg.id, set())
+                            if color_set:
+                                color = min(color_set)  # choose the smallest color
+                                register_name = register_mapping.get(color)
+                                if register_name:
+                                    arg.id = register_name  # Replace the variable with the corresponding register
+                                    if self.callee_saved_reg(register_name):
+                                        p.callee_saved_register.add(register_name)
         return p
 
     ############################################################################
@@ -437,9 +430,11 @@ class Compiler:
                 for i, x in enumerate(variables):
                     home[x] = self.gen_stack_access(i)
                 body = self.assign_homes_instrs(body, home)
-                pseudo_x86 = X86Program(body)
-                pseudo_x86.stack_space = align(8 * (len(variables) + len(pseudo_x86.callee_saved_register)), 16)
-                return pseudo_x86
+                new_pseudo_x86 = X86Program(body)
+                new_pseudo_x86.stack_space = align(8 * (len(variables) + len(pseudo_x86.callee_saved_register)), 16)
+                new_pseudo_x86.callee_saved_register = pseudo_x86.callee_saved_register
+                print(f"CALLEE SAVED REGISTER and VARIABLE SIZE are, {new_pseudo_x86.callee_saved_register}, {variables}")
+                return new_pseudo_x86
 
     ###########################################################################
     # Patch Instructions
@@ -551,11 +546,13 @@ class Compiler:
                 conclusion.append(Instr("movq", [Deref("rbp", starting_offset), Reg(reg)]))
                 starting_offset -= 8
             
-            conclusion.extend[
+            conclusion.extend(
+                [
                 Instr("addq", [Immediate(p.stack_space), Reg("rsp")]),
                 Instr("popq", [Reg("rbp")]),
                 Instr("retq", [])
-            ]
+                ]
+            )
             
             new_body = prelude + p.body + conclusion
 
