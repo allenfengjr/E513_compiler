@@ -353,8 +353,7 @@ def allocate_registers(self, p: X86Program, graph: UndirectedAdjList) -> X86Prog
                             arg.id = register_name  # Replace the variable with the corresponding register
                             if self.callee_saved_reg(register_name):
                                 p.callee_saved_register.add(register_name)
-    return p
-
+        return p
 
     ############################################################################
     # Assign Homes
