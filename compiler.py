@@ -311,48 +311,48 @@ class Compiler:
         return color_assignment
         pass
 
-def allocate_registers(self, p: X86Program, graph: UndirectedAdjList) -> X86Program:
-    # YOUR CODE HERE
-    # Use color_graph to obtain variable-to-color mapping
-    variables = set()
-    for instr in p.body:
-        variables.update(self.read_vars(instr) | self.write_vars(instr))
-    color_assignment = self.color_graph(graph, variables)
+    def allocate_registers(self, p: X86Program, graph: UndirectedAdjList) -> X86Program:
+        # YOUR CODE HERE
+        # Use color_graph to obtain variable-to-color mapping
+        variables = set()
+        for instr in p.body:
+            variables.update(self.read_vars(instr) | self.write_vars(instr))
+        color_assignment = self.color_graph(graph, variables)
 
-    # Define the correspondence between the colors and Registers
-    register_mapping = {
-        0: 'rcx', 1: 'rdx', 2: 'rsi', 3: 'rdi',
-        4: 'r8', 5: 'r9', 6: 'r10', 7: 'rbx',
-        8: 'r12', 9: 'r13', 10: 'r14'
-    }
-    # Record callee-saved register
-    p.callee_saved_register = set()
-    
-    for instr in p.body:
-        if isinstance(instr, Callq):
-            # Handle Callq instruction separately
-            for i, arg in enumerate(instr.func.args):
-                if isinstance(arg, Variable):
-                    color_set = color_assignment.get(arg.id, set())
-                    if color_set:
-                        color = min(color_set)  # choose the smallest color
-                        register_name = register_mapping.get(color)
-                        if register_name:
-                            instr.func.args[i] = Reg(register_name)  # Replace the variable with the corresponding register
-                            if self.callee_saved_reg(register_name):
-                                p.callee_saved_register.add(register_name)
-        else:
-            # For other instructions, replace variables with registers
-            for arg in [arg for arg in [instr.source(), instr.target()] if arg is not None]:
-                if isinstance(arg, Variable):
-                    color_set = color_assignment.get(arg.id, set())
-                    if color_set:
-                        color = min(color_set)  # choose the smallest color
-                        register_name = register_mapping.get(color)
-                        if register_name:
-                            arg.id = register_name  # Replace the variable with the corresponding register
-                            if self.callee_saved_reg(register_name):
-                                p.callee_saved_register.add(register_name)
+        # Define the correspondence between the colors and Registers
+        register_mapping = {
+            0: 'rcx', 1: 'rdx', 2: 'rsi', 3: 'rdi',
+            4: 'r8', 5: 'r9', 6: 'r10', 7: 'rbx',
+            8: 'r12', 9: 'r13', 10: 'r14'
+        }
+        # Record callee-saved register
+        p.callee_saved_register = set()
+        
+        for instr in p.body:
+            if isinstance(instr, Callq):
+                # Handle Callq instruction separately
+                for i, arg in enumerate(instr.func.args):
+                    if isinstance(arg, Variable):
+                        color_set = color_assignment.get(arg.id, set())
+                        if color_set:
+                            color = min(color_set)  # choose the smallest color
+                            register_name = register_mapping.get(color)
+                            if register_name:
+                                instr.func.args[i] = Reg(register_name)  # Replace the variable with the corresponding register
+                                if self.callee_saved_reg(register_name):
+                                    p.callee_saved_register.add(register_name)
+            else:
+                # For other instructions, replace variables with registers
+                for arg in [arg for arg in [instr.source(), instr.target()] if arg is not None]:
+                    if isinstance(arg, Variable):
+                        color_set = color_assignment.get(arg.id, set())
+                        if color_set:
+                            color = min(color_set)  # choose the smallest color
+                            register_name = register_mapping.get(color)
+                            if register_name:
+                                arg.id = register_name  # Replace the variable with the corresponding register
+                                if self.callee_saved_reg(register_name):
+                                    p.callee_saved_register.add(register_name)
         return p
 
     ############################################################################
