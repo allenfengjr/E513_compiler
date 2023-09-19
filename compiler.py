@@ -282,6 +282,15 @@ class Compiler:
             return True
         return False
     
+    def get_color_without_R(self, adj_color, min_color):
+        adj_color = set()
+        min_color = min()
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        
+        return color
     # Returns the coloring and the set of spilled variables.
     def color_graph(self, graph: UndirectedAdjList,
                     variables: Set[location]) -> Tuple[Dict[location, int], Set[location]]:
@@ -305,6 +314,7 @@ class Compiler:
                 else:
                     saturation_degree[v] += 1
             if available_colors:
+                # get_color_without_redun()
                 color = min(available_colors) # choose the smallest color
                 color_assignment[u] = color
 
@@ -334,8 +344,11 @@ class Compiler:
                     pass
                 case Callq("input_int", 0):
                     pass
-                case Instr(ins, [source, target]):
+                case Instr(ins, args):
                     # For other instructions, replace variables with registers
+                    '''
+                    
+                    
                     for arg in [arg for arg in [source, target] if arg is not None]:
                         if isinstance(arg, Variable):
                             color_set = color_assignment.get(arg.id, set())
@@ -346,6 +359,25 @@ class Compiler:
                                     arg.id = register_name  # Replace the variable with the corresponding register
                                     if self.callee_saved_reg(register_name):
                                         p.callee_saved_register.add(register_name)
+                    '''
+                    for i, a in enumerate(args):
+                        print("i is", i, "a is ", a)
+                        if isinstance(a, Variable):
+                            color_set = color_assignment.get(a.id, set())
+                            print("color set is, ", color_set)
+                            color = min(color_set)
+                            print("color is, ", color)
+
+                            register_name = register_mapping.get(color)
+                            print("register name is, ", register_name)
+
+                            print(f"here we replace {args[i]} into {register_name}")
+                            args[i] = register_name
+                            print(f"now args[i] is {args[i]}")
+                            if self.callee_saved_reg(register_name):
+                                p.callee_saved_register.add(register_name)
+
+        print(f"Program instructions are {p.body}")
         return p
 
     ############################################################################
@@ -422,15 +454,14 @@ class Compiler:
                 # second, build_interference, return UndirectedAdjList
                 interference_graph = self.build_interference(pseudo_x86, liveness)
                 # allocate_registers, return X86Program(which replace some variable into register)
-                pseudo_x86 = self.allocate_registers(pseudo_x86, interference_graph)
+                p = self.allocate_registers(pseudo_x86, interference_graph)
                 # assign the new home on new body
-                body = pseudo_x86.body
-                variables = self.collect_locals_instrs(body)
+                variables = self.collect_locals_instrs(p.body)
                 home = {}
                 for i, x in enumerate(variables):
                     home[x] = self.gen_stack_access(i)
-                body = self.assign_homes_instrs(body, home)
-                new_pseudo_x86 = X86Program(body)
+                new_body = self.assign_homes_instrs(p.body, home)
+                new_pseudo_x86 = X86Program(new_body)
                 new_pseudo_x86.stack_space = align(8 * (len(variables) + len(pseudo_x86.callee_saved_register)), 16)
                 new_pseudo_x86.callee_saved_register = pseudo_x86.callee_saved_register
                 print(f"CALLEE SAVED REGISTER and VARIABLE SIZE are, {new_pseudo_x86.callee_saved_register}, {variables}")
