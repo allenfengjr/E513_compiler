@@ -9,7 +9,7 @@ from priority_queue import *
 Binding = Tuple[Name, expr]
 Temporaries = List[Binding]
 
-
+# Register global variables
 caller_save: Set[str] = {'rax','rcx','rdx','rsi','rdi','r8','r9','r10','r11'}
 callee_save: Set[str] = {'rsp', 'rbp', 'rbx', 'r12', 'r13', 'r14', 'r15'}
 reserved_registers: Set[str] = {'rax', 'r11', 'r15', 'rsp', 'rbp', '__flag'}  # Register that cannot be used for allocation (for negetive intergers)
@@ -39,14 +39,17 @@ for i, r in enumerate(registers_for_alloc):
 extra_arg_registers = list(set(arg_registers) - set(registers_for_alloc))
 for i, r in enumerate(extra_arg_registers):
     register_color[r] = -i - 6
-    
+
+# L_if global variables
+C_if_block = {}
+
 class Compiler:
     ###########################################################################
     # Shrink if
     ###########################################################################
     # type-checker will not handle if operand is a `IfExp`, so any potinal expression will have to go shrink_exp
     def shrink_exp(self, e: expr) -> expr:
-        print(f"The expression I need to modify is, {e}")
+        # print(f"The expression I need to modify is, {e}")
         match e:
             case IfExp(test, body, orelse):
                 res = self.shrink_exp(test)
@@ -73,17 +76,41 @@ class Compiler:
             case Call(func, args, keywords):
                 args_exp = [self.shrink_exp(i) for i in args]
                 return Call(func, args_exp, keywords)
+            case Constant():
+                return e
+            case Name():
+                return e
+            case Compare(left, cmp, comparators):
+                shrink_left = self.shrink_exp(left)
+                shrink_comp = [self.shrink_exp(i) for i in comparators]
+                return Compare(shrink_left, cmp, shrink_comp)
             case _:
+                # Begin should not appear at this pass
                 raise Exception("The missing expression I do not handle")
             
     def shrink_stmt(self, s:stmt) -> stmt:
         match s:
             case Assign(targets, value):
-                ...
+                shrink_targets = [self.shrink_exp(i) for i in targets]
+                shrink_value = self.shrink_exp(value)
+                return Assign(shrink_targets, shrink_value)
             case Expr(value):
-                ...
+                return Expr(self.shrink_exp(value))
             case If(test, body, orelse):
-                ...
+                shrink_test = self.shrink_exp(test)
+                shrink_body = [self.shrink_stmt(i) for i in body]
+                shrink_orelse = [self.shrink_stmt(i) for i in orelse]
+                return If(shrink_test, shrink_body, shrink_orelse)
+            
+    def shrink(self, p:Module) -> Module:
+        transformed_statements = []
+        for stmt in p.body:
+            shrink_statement = self.shrink_stmt(stmt)
+            transformed_statements.append(shrink_statement)
+            # print(f"the stmts are, {[i.__class__ for i in rco_statements]}, value is {rco_statements}")
+        #Create a new Module with the transformed statements.
+        transformed_program = Module(transformed_statements)
+        return transformed_program
                 
     ###########################################################################
     #Remove Complex Operands
@@ -91,6 +118,7 @@ class Compiler:
     
     
     def rco_exp(self, e: expr, need_atomic: bool) -> Tuple[expr, Temporaries]:
+        # print(f"the expression needs to rco is {e}, its type is {e.__class__}")
         match e:
             case Constant():
                 # Question: how to deal with large constant here.
@@ -123,24 +151,30 @@ class Compiler:
                     new_args += [t_exp]
                     arg_temp += t_temp
                 if need_atomic:
-                    temp = Name(generate_name("temp"))
+                    temp = Name(generate_name("temp_call"))
                     return (temp, func_temp + arg_temp + [(temp, Call(new_func, new_args, []))])
                 else: 
                     return Call(new_func, new_args, []), func_temp + arg_temp
             case IfExp(test, body, orelse):
                 # all three does not need atomic
+                # print(f"do test rco, test is {test}")
                 rco_test, tmp_test = self.rco_exp(test, False)
+                # print(f"do body rco, body is {body}")
                 rco_body, tmp_body = self.rco_exp(body, False)
+                # print(f"do orelse rco, orelse is {orelse}")
                 rco_orelse, tmp_orelse = self.rco_exp(orelse, False)
+                # make_begin will create stmt^* for IfExp, it will return a Begin
                 new_body = make_begin(tmp_body, rco_body)
+                # print(f"the new body is {new_body}")
                 new_orelse = make_begin(tmp_orelse, rco_orelse)
                 if need_atomic:
                     # If need atomic, then I must return an atom
-                    tmp = Name(generate_name("tmp"))
+                    tmp = Name(generate_name("temp_if"))
                     return (tmp, tmp_test+[(tmp, IfExp(rco_test, new_body, new_orelse))])
                 else:
-                    # Otherwise, I can return an expression
-                    return IfExp(rco_test, new_body, new_orelse)
+                    # Otherwise, I can return an expression. 
+                    # I have Assign in Begin, so no need to append temps here
+                    return IfExp(rco_test, new_body, new_orelse), tmp_test
             case Compare(left, cmp, comparators):
                 rco_left, tmp_test = self.rco_exp(left, True)
                 rco_comparators = []
@@ -150,14 +184,14 @@ class Compiler:
                     rco_comparators += [rco_ce]
                     tmp_comparators += tmp_ce
                 if need_atomic:
-                    tmp = Name(generate_name("tmp"))
+                    tmp = Name(generate_name("temp_cmp"))
                     return (tmp, tmp_test + [(tmp, Compare(rco_left, cmp, rco_comparators))] + tmp_comparators)
                 else:
                     return Compare(rco_left, cmp, rco_comparators), tmp_test + tmp_comparators
             case Begin(body, result):
-                print("I do have begin")
-                ...
-
+                # print("I do have begin")
+                new_result, tmp_res = self.rco_exp(result, False)
+                return Begin(body, new_result), tmp_res
             case _:
                 print(e.__class__)
                 raise Exception('rco_exp not implemented')  
@@ -203,7 +237,7 @@ class Compiler:
                 basic_blocks[label] = stmts
                 return [Goto(label)]
             
-    def explicate_effect(self, e, cont, basic_blocks):
+    def explicate_effect(self, e, cont, basic_blocks) -> stmt:
         match e:
             case IfExp(test, body, orelse):
                 ...
@@ -213,6 +247,7 @@ class Compiler:
                 ...
             case _:
                 ...
+    
     def explicate_assign(self, rhs, lhs, cont, basic_blocks):
         match rhs:
             case IfExp(test, body, orelse):
@@ -221,6 +256,7 @@ class Compiler:
                 ...
             case _:
                 return [Assign([lhs], rhs)] + cont
+    
     def explicate_pred(self, cnd, thn, els, basic_blocks):
         match cnd:
             case Compare(left, [op], [right]):
@@ -241,6 +277,7 @@ class Compiler:
                 return [If(Compare(cnd, [Eq()], [Constant(False)]),
                         self.create_block(els, basic_blocks),
                         self.create_block(thn, basic_blocks))]
+    
     def explicate_stmt(self, s, cont, basic_blocks):
         match s:
             case Assign([lhs], rhs):
@@ -248,7 +285,10 @@ class Compiler:
             case Expr(value):
                 return self.explicate_effect(value, cont, basic_blocks)
             case If(test, body, orelse):
-                ...
+                return self.explicate_pred(test, body, orelse)
+            case _:
+                raise Exception("Unhandle stmt in explicate control")
+    
     def explicate_control(self, p):
         match p:
             case Module(body):
