@@ -1,6 +1,7 @@
-v = 1
-w = 42
-x = (v + 7)
-y = x
-z = (x + w)
-print((z + -(y)))
+a = 2
+b = 3
+c = 0
+if (a+c) > b and True:
+    print(1)
+else:
+    print(2)
