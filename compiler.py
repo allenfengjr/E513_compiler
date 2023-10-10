@@ -151,25 +151,22 @@ class Compiler:
                     new_args += [t_exp]
                     arg_temp += t_temp
                 if need_atomic:
-                    temp = Name(generate_name("temp_call"))
+                    temp = Name(generate_name("temp"))
                     return (temp, func_temp + arg_temp + [(temp, Call(new_func, new_args, []))])
                 else: 
                     return Call(new_func, new_args, []), func_temp + arg_temp
             case IfExp(test, body, orelse):
                 # all three does not need atomic
-                # print(f"do test rco, test is {test}")
                 rco_test, tmp_test = self.rco_exp(test, False)
-                # print(f"do body rco, body is {body}")
                 rco_body, tmp_body = self.rco_exp(body, False)
-                # print(f"do orelse rco, orelse is {orelse}")
                 rco_orelse, tmp_orelse = self.rco_exp(orelse, False)
                 # make_begin will create stmt^* for IfExp, it will return a Begin
                 new_body = make_begin(tmp_body, rco_body)
-                # print(f"the new body is {new_body}")
                 new_orelse = make_begin(tmp_orelse, rco_orelse)
+                print(f"new_body is {new_body.__class__}, new_orelse is {new_orelse.__class__}")
                 if need_atomic:
                     # If need atomic, then I must return an atom
-                    tmp = Name(generate_name("temp_if"))
+                    tmp = Name(generate_name("temp"))
                     return (tmp, tmp_test+[(tmp, IfExp(rco_test, new_body, new_orelse))])
                 else:
                     # Otherwise, I can return an expression. 
@@ -184,7 +181,7 @@ class Compiler:
                     rco_comparators += [rco_ce]
                     tmp_comparators += tmp_ce
                 if need_atomic:
-                    tmp = Name(generate_name("temp_cmp"))
+                    tmp = Name(generate_name("temp"))
                     return (tmp, tmp_test + [(tmp, Compare(rco_left, cmp, rco_comparators))] + tmp_comparators)
                 else:
                     return Compare(rco_left, cmp, rco_comparators), tmp_test + tmp_comparators
@@ -228,7 +225,7 @@ class Compiler:
     ############################################################################
     # Explicate Control
     ############################################################################
-    def create_block(stmts, basic_blocks):
+    def create_block(self, stmts, basic_blocks):
         match stmts:
             case [Goto(l)]:
                 return stmts
@@ -237,55 +234,96 @@ class Compiler:
                 basic_blocks[label] = stmts
                 return [Goto(label)]
             
+    # This will return a list of C_if stmts add to dictionary
+    # How do I define cont? just use stmt[1:]?
     def explicate_effect(self, e, cont, basic_blocks) -> stmt:
         match e:
-            case IfExp(test, body, orelse):
-                ...
+            case IfExp(test, body, orelse):                
+                body_exp = self.explicate_effect(body, cont, basic_blocks)
+                orelse_exp = self.explicate_effect(orelse, cont, basic_blocks)
+                test_exp = self.explicate_pred(test, body_exp, orelse_exp, basic_blocks)
+                return test_exp
             case Call(func, args):
-                ...
+                stmts = [e] + cont
+                call_block = self.create_block(stmts, basic_blocks)
+                return call_block
             case Begin(body, result):
-                ...
+                # Begin is exactually a set of stmts and a result after these stmts
+                # I want to have a cont_block that adding body's stmts
+                # result is actually the original body/orelse itself
+                # can we merge result? => result is dealed in explicate_pred part, so no need
+                cont_block = self.create_block(cont, basic_blocks)
+                cont_block = [Return(result)] + cont_block
+                for b in reversed(body):
+                    cont_block = self.explicate_stmt(b, cont_block, basic_blocks) # merge
+                return cont_block
             case _:
-                ...
+                return [e] + cont # just merge
     
-    def explicate_assign(self, rhs, lhs, cont, basic_blocks):
+    def explicate_assign(self, rhs, lhs, cont, basic_blocks) -> stmt:
         match rhs:
             case IfExp(test, body, orelse):
-                ...
+                cont_block = self.create_block(cont, basic_blocks)
+                print(f"Assign body is {body}, orelse is {orelse}, test is {test}, test type is {test.__class__}")
+                # two branch
+                body_ass = self.explicate_assign(body, lhs, cont_block, basic_blocks)
+                orelse_ass = self.explicate_assign(orelse, lhs, cont_block, basic_blocks)
+                test_ass = self.explicate_pred(test, body_ass, orelse_ass, basic_blocks)
+                return test_ass
             case Begin(body, result):
-                ...
+                # in what situation, Begin will on the rhs of Assign?
+                # Anyway, if it is on the rhs, we deal with is reversely as above
+                print("Begin is here")
+                cont_block = self.create_block(cont, basic_blocks)
+                for b in reversed(body):
+                    cont_block = self.explicate_stmt(b, cont_block, basic_blocks) # merge  
+                return cont_block
             case _:
+                print(f"Assign lhs is {lhs}, rhs is {rhs}")
                 return [Assign([lhs], rhs)] + cont
     
-    def explicate_pred(self, cnd, thn, els, basic_blocks):
+    def explicate_pred(self, cnd, thn, els, basic_blocks) -> stmt:
         match cnd:
             case Compare(left, [op], [right]):
-                goto_thn = self.create_block(thn, basic_blocks)
-                goto_els = self.create_block(els, basic_blocks)
-                return [If(cnd, goto_thn, goto_els)]
+                thn_block = self.create_block(thn, basic_blocks)
+                els_block = self.create_block(els, basic_blocks)
+                return [If(cnd, thn_block, els_block)]
             case Constant(True):
                 return thn
             case Constant(False):
                 return els
             case UnaryOp(Not(), operand):
-                ...
+                return self.explicate_pred(operand, els, thn, basic_blocks)
             case IfExp(test, body, orelse):
-                ...
+                # remove nested if, use test instead of the whole IfExp to decide branch
+                thn_block = self.explicate_effect(body, thn, basic_blocks)
+                els_block = self.explicate_effect(orelse, els, basic_blocks)
+                return self.explicate_pred(test, thn_block, els_block, basic_blocks)
             case Begin(body, result):
-                ...
+                # here "result" is the cnd(strange...)
+                # still, we add body into cont(both thn and els?)
+                for b in reversed(body):
+                    thn_block = self.explicate_effect(b, thn, basic_blocks)
+                    els_block = self.explicate_effect(b, els, basic_blocks)
+                #return [If(result, thn_block, els_block)]
+                return self.explicate_pred(result, thn_block, els_block, basic_blocks)
+
             case _:
                 return [If(Compare(cnd, [Eq()], [Constant(False)]),
                         self.create_block(els, basic_blocks),
                         self.create_block(thn, basic_blocks))]
     
     def explicate_stmt(self, s, cont, basic_blocks):
+        print(f'stmt is {s}, type is {s.__class__}')
         match s:
             case Assign([lhs], rhs):
                 return self.explicate_assign(rhs, lhs, cont, basic_blocks)
             case Expr(value):
                 return self.explicate_effect(value, cont, basic_blocks)
             case If(test, body, orelse):
-                return self.explicate_pred(test, body, orelse)
+                thn = self.explicate_stmt(body, cont, basic_blocks)
+                els = self.explicate_stmt(orelse, cont, basic_blocks)
+                return self.explicate_pred(test, thn, els, basic_blocks)
             case _:
                 raise Exception("Unhandle stmt in explicate control")
     
