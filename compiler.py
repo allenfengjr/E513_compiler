@@ -3,7 +3,7 @@ from ast import *
 from utils import *
 from x86_ast import *
 from typing import List, Tuple, Set, Dict
-from graph import UndirectedAdjList
+from graph import *
 from queue import *
 from priority_queue import *
 Binding = Tuple[Name, expr]
@@ -163,7 +163,6 @@ class Compiler:
                 # make_begin will create stmt^* for IfExp, it will return a Begin
                 new_body = make_begin(tmp_body, rco_body)
                 new_orelse = make_begin(tmp_orelse, rco_orelse)
-                print(f"new_body is {new_body.__class__}, new_orelse is {new_orelse.__class__}")
                 if need_atomic:
                     # If need atomic, then I must return an atom
                     tmp = Name(generate_name("temp"))
@@ -190,7 +189,6 @@ class Compiler:
                 new_result, tmp_res = self.rco_exp(result, False)
                 return Begin(body, new_result), tmp_res
             case _:
-                print(e.__class__)
                 raise Exception('rco_exp not implemented')  
 
     def rco_stmt(self, s: stmt) -> List[stmt]:
@@ -329,7 +327,7 @@ class Compiler:
                     orelse_b = self.explicate_stmt(e, orelse_b, basic_blocks)
                 return self.explicate_pred(test, body_b, orelse_b, basic_blocks)
             case _:
-                print(f"stmt is {s}, type is {s.__class__}")
+                # print(f"stmt is {s}, type is {s.__class__}")
                 raise Exception("Unhandle stmt in explicate control")
     
     def explicate_control(self, p):
@@ -352,6 +350,11 @@ class Compiler:
             return Variable(e.id)
         elif isinstance(e, Constant):
             return Immediate(e.value)
+        # Handle Boolean constants:
+        elif isinstance(e, True):
+            return Immediate(1)
+        elif isinstance(e, False):
+            return Immediate(0)
         # Errors for unhandled cases:
         else:
             raise Exception('select_arg not implemented')
@@ -364,9 +367,13 @@ class Compiler:
                 return 'subq'
             case USub():
                 return 'negq'
+            # no need to deal with not() here, we will use the xorq instruction
+            # case Not():
+            #     return 'notq' 
             case _:
                 raise Exception('select_op unhandled: ' + repr(op))
-
+            
+            
     def select_stmt(self, s: stmt) -> List[instr]:
         match s:
             case Expr(Call(Name('input_int'), [])):
@@ -376,6 +383,7 @@ class Compiler:
                         Callq(label_name('print_int'), 1)]
             case Expr(value):
                 return []
+
             case Assign([lhs], Name(id)):
                 new_lhs = self.select_arg(lhs)
                 if Name(id) != lhs:
@@ -422,16 +430,123 @@ class Compiler:
             case Assign([lhs], Call(Name('print'), [operand])):
                 return [Instr('movq', [self.select_arg(operand), Reg('rdi')]),
                         Callq(label_name('print_int'), 1)]
+                
+            # deal with the UnaryOp(Not(),exp)
+            case Assign([lhs], UnaryOp(Not(), operand)):
+                new_lhs = self.select_arg(lhs)
+                rand = self.select_arg(operand)
+                # If the left-hand-side variable is the same as the argument as the argument of not
+                if new_lhs == rand:
+                    return [Instr('xorq', [Immediate(1), new_lhs])]
+                else:
+                    return [Instr('movq', [rand, new_lhs]),
+                            Instr('xorq', [Immediate(1), new_lhs])]
+                    
+            # deal with the Compare(exp,[cmp],[exp]), cmp includes: Eq(), NotEq(), Lt(), LtE(), Gt(), GtE()
+            case Assign([lhs], Compare(left, [Eq()], right)):
+                new_lhs = self.select_arg(lhs)
+                arg1 = self.select_arg(left)
+                arg2 = self.select_arg(right[0])   
+                return [Instr('movq', [arg2, arg1]),
+                        Instr('sete', [ByteReg('al')]), # Set 'al' based on equality
+                        Instr('movzbq', [ByteReg('al'), new_lhs]) # Zero-extend 'al' to 'var'
+                       ]
+            case Assign([lhs], Compare(left, [NotEq()], right)):
+                new_lhs = self.select_arg(lhs)
+                arg1 = self.select_arg(left)
+                arg2 = self.select_arg(right)   
+                return [Instr('movq', [arg2, arg1]),
+                        Instr('setne'), [ByteReg('al')], # Set 'al' based on equality
+                        Instr('movzbq', [ByteReg('al'), new_lhs]) # Zero-extend 'al' to 'var'
+                       ]
+            case Assign([lhs], Compare(left, [Lt()], right)):
+                new_lhs = self.select_arg(lhs)
+                arg1 = self.select_arg(left)
+                arg2 = self.select_arg(right)   
+                return [Instr('movq', [arg2, arg1]),
+                        Instr('setl'), [ByteReg('al')], # Set 'al' based on equality
+                        Instr('movzbq', [ByteReg('al'), new_lhs]) # Zero-extend 'al' to 'var'
+                       ]
+            case Assign([lhs], Compare(left, [LtE()], right)):
+                new_lhs = self.select_arg(lhs)
+                arg1 = self.select_arg(left)
+                arg2 = self.select_arg(right)   
+                return [Instr('movq', [arg2, arg1]),
+                        Instr('setle'), [ByteReg('al')], # Set 'al' based on equality
+                        Instr('movzbq', [ByteReg('al'), new_lhs]) # Zero-extend 'al' to 'var'
+                       ]
+            case Assign([lhs], Compare(left, [Gt()], right)):
+                new_lhs = self.select_arg(lhs)
+                arg1 = self.select_arg(left)
+                arg2 = self.select_arg(right)   
+                return [Instr('movq', [arg2, arg1]),
+                        Instr('setg'), [ByteReg('al')], # Set 'al' based on equality
+                        Instr('movzbq', [ByteReg('al'), new_lhs]) # Zero-extend 'al' to 'var'
+                       ]     
+            case Assign([lhs], Compare(left, [GtE()], right)):
+                new_lhs = self.select_arg(lhs)
+                arg1 = self.select_arg(left)
+                arg2 = self.select_arg(right)   
+                return [Instr('movq', [arg2, arg1]),
+                        Instr('setge'), [ByteReg('al')], # Set 'al' based on equality
+                        Instr('movzbq', [ByteReg('al'), new_lhs]) # Zero-extend 'al' to 'var'
+                       ]     
+            # deal with goto statement
+            case Goto(label):
+                return [Jump(label)]
+            # deal with if statement  ???
+            
+            
+            case If(test, [body], [orelse]) if isinstance(test, Compare):
+                arg1 = self.select_arg(test.left)
+                arg2 = self.select_arg(test.comparators[0])
+                cmp_op = test.ops[0]
+
+                if isinstance(cmp_op, Eq):
+                    condition = 'je'  # Jump if equal
+                elif isinstance(cmp_op, NotEq):
+                    condition = 'jne'  # Jump if not equal
+                elif isinstance(cmp_op, Lt):
+                    condition = 'jl'  # Jump if less than
+                elif isinstance(cmp_op, LtE):
+                    condition = 'jle'  # Jump if less than or equal
+                elif isinstance(cmp_op, Gt):
+                    condition = 'jg'  # Jump if greater than
+                elif isinstance(cmp_op, GtE):
+                    condition = 'jge'  # Jump if greater than or equal
+                else:
+                    raise Exception(f'Unhandled comparison operator: {cmp_op}')
+                
+                print("create block here is, ", body.label, orelse.label)
+
+                return [
+                    Instr('cmpq', [arg2, arg1]),
+                    #Instr(condition, [GlobalValue(body.label)]),  # Use the appropriate conditional jump
+                    JumpIf(condition[1:], body.label),
+                    #Instr('jmp', [GlobalValue(orelse.label)])
+                    Jump(orelse.label)
+                ]
+            # deal with return:
+            case Return(value):
+                arg1 = self.select_arg(value)
+                return [
+                        Instr('movq', [arg1, Reg('rax')]),
+                        Jump(label_name('conclusion'))
+                        ]
             case _:
+                print(f" unhandle stmt {s}")
                 raise Exception('error in select_stmt, unknown: ' + repr(s))
     
 
     def select_instructions(self, p: Module) -> X86Program:
         # Implement the logic to select instructions for a program
-        selected_instructions = []
-        for stmt in p.body:
-            selected_stmt = self.select_stmt(stmt)
-            selected_instructions += selected_stmt
+        selected_instructions = {}
+        for (label, block) in p.body.items():
+            print("block is, ", block)
+            selected_instructions[label] = []
+            for stmt in block:
+                selected_stmt = self.select_stmt(stmt)
+                selected_instructions[label] += selected_stmt
         # Create a new X86Program with the selected instructions.
         x86_program = X86Program(selected_instructions)
         return x86_program       
@@ -450,6 +565,9 @@ class Compiler:
                 return {Reg(reg)}
             case Immediate(value):
                 return set()
+            # add 'bytereg' arg var?
+            case ByteReg(id):
+                return {a}
             case _:
                 raise Exception('error in vars_arg, unknown: ' + repr(a))
 
@@ -461,6 +579,18 @@ class Compiler:
                 return self.vars_arg(s)
             case Callq(func, num_args):         # Callq should include all the arguments-passing registers in read_set
                 return set([Reg(r) for r in arg_registers[0:num_args]])
+            case Instr('xorq', [s, t]): # handle the new xorq, both s and t are readable
+                return self.vars_arg(s) | self.vars_arg(t)
+            case Instr('cmpq', [s, t]): # compare instrution
+                return self.vars_arg(s) | self.vars_arg(t)
+            case Instr('set', [cc, s]):  # cc is the condition code
+                return self.vars_arg(s)
+            case Instr('movzbq', [s, t]): #  s is single byte register, t is 64-bit register
+                return self.vars_arg(s) | self.vars_arg(t)
+            case JumpIf(cc, label): # What is the readable part of JumpIf
+                return {} # both cc and label are readable?
+            case Jump(label):
+                return {}
             case _:
                 raise Exception('error in read_vars, unexpected: ' + repr(i))
 
@@ -474,15 +604,26 @@ class Compiler:
                 return self.vars_arg(t)
             case Callq(func, num_args):         # Callq should include all the caller-saved registers in write_set
                 return set([Reg(r) for r in caller_save_for_alloc])
+            case Instr('xorq', [s, t]): # handle the new xorq,  t is writable
+                return self.vars_arg(t)
+            case Instr('set', [cc, s]): 
+                return self.vars_arg(s)
+            case Instr('movzbq',[s,t]):
+                return self.vars_arg(t)
+            case JumpIf(cc, label):
+                return set() # JmpIf instruction does not modify or write to any variables or registers
+            case Jump(label):
+                return set()
             case _:
+                print(f"uncatch instr is, {i}")
                 raise Exception('error in write_vars, unexpected: ' + repr(i))
-    
+    # Applying the liveness-analysis rules
     def uncover_live_instr(self, i:instr, live_before_succ: Set[location],
                            live_before: Dict[instr, Set[location]],
                            live_after: Dict[instr, Set[location]]):
         live_after[i] = live_before_succ
         live_before[i] = live_after[i].difference(self.write_vars(i)).union(self.read_vars(i))
-    
+
     def trace_live(self, p: X86Program, live_before: Dict[instr, Set[location]],
                    live_after: Dict[instr, Set[location]]):
         match p:
@@ -496,20 +637,60 @@ class Compiler:
                 i = i + 1
             trace("")
 
+# The trace live in blocks
+    def trace_live_blocks(self, blocks, live_before: Dict[instr, Set[location]],
+                          live_after: Dict[instr, Set[location]]):
+        for (l, ss) in blocks.body.items():
+            trace(l + ':\n')
+            i = 0
+            for s in ss:
+                if i==0:
+                    trace('\t\t{' + ','.join([str(l) for l in live_before[s]]) + '}')
+                trace('\t' + str(s))
+                trace('\t{' + ','.join([str(l) for l in live_after[s]]) + '}')
+                i = i + 1
+            trace('')
+
+# When meet with 'Jump' and 'JumpIf', go to the label
+    @staticmethod
+    def adjacent_instr(s:instr) -> List[str]:
+        if isinstance(s, Jump) or isinstance(s, JumpIf):
+            return[s.label]
+        else: 
+            return []
+# Create CFG graph
+    def blocks_to_graph(self, blocks: Dict[str, List[instr]]) -> DirectedAdjList:
+        graph = DirectedAdjList()  
+        for u in blocks.keys():
+            graph.add_vertex(u)
+        for (u, ss) in blocks.items():
+            for s in ss:
+                for v in self.adjacent_instr(s):
+                    graph.add_edge(u, v)
+        return graph
+        
     def uncover_live(self, p: X86Program) -> Dict[instr, Set[location]]:
         match p:
             case X86Program(body):
                 live_before = {}
                 live_after = {}
-                live_before_succ = set([])
-                for i in reversed(body):
-                    self.uncover_live_instr(i, live_before_succ, live_before,
-                                            live_after)
-                    live_before_succ = live_before[i]
-
+                cfg = self.blocks_to_graph(body)
+                cfg_trans = transpose(cfg) # transpost the CFG graph
+                live_before_block = \
+                    {label_name('conclusion'):{Reg('rax'),Reg('rsp')}}
+                for l in topological_sort(cfg_trans): # Applying the topological sort
+                    if l!= label_name('conclusion'):
+                        adj_live = [live_before_block[v]\
+                                    for v in cfg.adjacent(l)]
+                        live_before_succ = set().union(*adj_live)
+                        for i in reversed(body[l]): # why not for i in body[l]
+                            self.uncover_live_instr(i, live_before_succ, live_before, live_after)
+                            live_before_succ = live_before[i]
+                        live_before_block[l] = live_before_succ
                 trace("uncover live:")
-                self.trace_live(p, live_before, live_after)
+                self.trace_live_blocks(p, live_before, live_after)
                 return live_after
+
 
     ############################################################################
     # Build Interference
@@ -520,8 +701,9 @@ class Compiler:
         match p:
             case X86Program(body):
                 G = UndirectedAdjList()
-                for i in body:
-                    self.interfere_instr(i, G, live_after)
+                for label, block in body.items():
+                    for i in block:
+                        self.interfere_instr(i, G, live_after)
                 return G
 
     def interfere_instr(self, i: instr, graph: UndirectedAdjList,
@@ -532,22 +714,34 @@ class Compiler:
                     for d in self.write_vars(i):
                         if v != d and s != v:
                             graph.add_edge(d, v)
+
+            case Instr('movzbq', [s, t]):
+                for v in live_after[i]:
+                    for d in self.write_vars(i):
+                        if v != d and s != v:
+                            graph.add_edge(d, v)
+            # how to know the inference of x86_if instruction
+            case Instr('cmpq', [s, t]):
+                for v in live_after[i]:
+                    for d in self.write_vars(i):
+                        if v != d and s != v:
+                            graph.add_edge(d, v)
+            
             case _:
+                print(f"the i is, {i}")
                 for v in live_after[i]:
                     for d in self.write_vars(i):
                         if v != d:
                             graph.add_edge(d, v)
-    
-    def build_move(self, p:X86Program) -> UndirectedAdjList:
-        # THIS IS FOR CHALLANGE, should build a move graph to move bias
-        # this should be called in `allocate_registers`
-        # YOUR CODE HERE
-        move_graph = UndirectedAdjList()
-        for i in p.body:
-            if isinstance(i, Instr) and i.instr == 'movq': #Connect all the vertax in movq instruction
-                move_graph.add_edge(i.source(), i.target())
-        return move_graph
-        pass
+    # def build_move(self, p:X86Program) -> UndirectedAdjList:
+    #     # THIS IS FOR CHALLANGE, should build a move graph to move bias
+    #     # this should be called in `allocate_registers`
+    #     # YOUR CODE HERE
+    #     move_graph = UndirectedAdjList()
+    #     for i in p.body:
+    #         if isinstance(i, Instr) and i.instr == 'movq': #Connect all the vertax in movq instruction
+    #             move_graph.add_edge(i.source(), i.target())
+    #     return move_graph
     
     ############################################################################
     # Allocate Registers
@@ -571,7 +765,7 @@ class Compiler:
         unavail_colors = {}
         def compare(u, v):
             return len(unavail_colors[u.key]) < len(unavail_colors[v.key])
-        Q = PriorityQueue(compare)
+        Q = PriorityQueue(compare) # lambda -> 
         color = {}
         for r in registers_for_alloc:
             color[Reg(r)] = register_color[r]
@@ -587,7 +781,7 @@ class Compiler:
             if c >= len(registers_for_alloc):
                 spills = spills.union(set([v]))  # add method instead?
             for u in graph.adjacent(v):
-                if u.id not in registers:
+                if u.id not in registers and u.id not in byte_to_full_reg:
                     unavail_colors[u].add(c)
                     Q.increase_key(u)
         return color, spills
@@ -611,11 +805,17 @@ class Compiler:
                 result.add(registers_for_alloc[color[x]])
         return list(result)
 
+##  allocate registers
     def allocate_registers(self, p: X86Program,
                            graph: UndirectedAdjList) -> X86Program:
         match p:
             case X86Program(body):
-                variables = self.collect_locals_instrs(body)
+                variables_block = {}
+                for label, block in body.items():
+                    variables_block[label] = self.collect_locals_instrs(block)
+                variables = set()
+                for value_set in variables_block.values():
+                    variables = variables.union(value_set)                
                 (color, spills) = self.color_graph(graph, variables)
                 trace("color")
                 trace(color)
@@ -625,6 +825,7 @@ class Compiler:
                 used_callee = p.used_callee
                 used_callee = self.used_callee_reg(variables, color)
                 num_callee = len(used_callee)
+                
                 home = {}
                 for x in variables:
                     home[x] = self.identify_home(color[x], 8 + 8 * num_callee)
@@ -638,64 +839,7 @@ class Compiler:
                 new_p.used_callee = used_callee
                 return new_p
     
-    # def allocate_registers(self, p: X86Program, graph: UndirectedAdjList) -> X86Program:
-    #     # YOUR CODE HERE
-    #     # Use color_graph to obtain variable-to-color mapping
-    #     variables = set()
-    #     for instr in p.body:
-    #         variables.update(self.read_vars(instr) | self.write_vars(instr))
-    #     color_assignment = self.color_graph(graph, variables)
-
-    #     # Define the correspondence between the colors and Registers
-    #     register_mapping = {
-    #         0: 'rcx', 1: 'rdx', 2: 'rsi', 3: 'rdi',
-    #         4: 'r8', 5: 'r9', 6: 'r10', 7: 'rbx',
-    #         8: 'r12', 9: 'r13', 10: 'r14'
-    #     }
-    #     # Record callee-saved register
-    #     p.callee_saved_register = set()
-        
-    #     for instr in p.body:
-    #         match instr:
-    #             case Callq("print_int", 1):
-    #                 pass
-    #             case Callq("input_int", 0):
-    #                 pass
-    #             case Instr(ins, args):
-    #                 # For other instructions, replace variables with registers
-    #                 '''
-                    
-                    
-    #                 for arg in [arg for arg in [source, target] if arg is not None]:
-    #                     if isinstance(arg, Variable):
-    #                         color_set = color_assignment.get(arg.id, set())
-    #                         if color_set:
-    #                             color = min(color_set)  # choose the smallest color
-    #                             register_name = register_mapping.get(color)
-    #                             if register_name:
-    #                                 arg.id = register_name  # Replace the variable with the corresponding register
-    #                                 if self.callee_saved_reg(register_name):
-    #                                     p.callee_saved_register.add(register_name)
-    #                 '''
-    #                 for i, a in enumerate(args):
-    #                     print("i is", i, "a is ", a)
-    #                     if isinstance(a, Variable):
-    #                         color_set = color_assignment.get(a.id, set())
-    #                         print("color set is, ", color_set)
-    #                         color = min(color_set)
-    #                         print("color is, ", color)
-
-    #                         register_name = register_mapping.get(color)
-    #                         print("register name is, ", register_name)
-
-    #                         print(f"here we replace {args[i]} into {register_name}")
-    #                         args[i] = register_name
-    #                         print(f"now args[i] is {args[i]}")
-    #                         if self.callee_saved_reg(register_name):
-    #                             p.callee_saved_register.add(register_name)
-
-    #     print(f"Program instructions are {p.body}")
-    #     return p
+    
 
     ############################################################################
     # Assign Homes
@@ -723,6 +867,10 @@ class Compiler:
                 return set().union(*lss)
             case Callq(func, num_args):
                 return set()
+            case Jump(label):
+                return set()
+            case JumpIf(cc, label):
+                return set()
             case _:
                 raise Exception('error in collect_locals_instr, unknown: ' + repr(i))
 
@@ -738,9 +886,17 @@ class Compiler:
         # Assignment 2. Register Allocation
         # In this assignment, home[a] may be a Reg or Deref?
         # ==> NO, home does not have Reg because they are replaced in the previous function
-        if isinstance(a, Variable):
-            return home[a]
-        return a
+        # if isinstance(a, Variable):
+        #     return home[a]
+        # return a
+        match a:
+            case ByteReg(id):
+                return a 
+            case Variable(id):
+                return home[a]
+            case _:
+                return super().assign_homes_arg(a, home)
+            
 
     def assign_homes_instr(self, i: instr,
                            home: Dict[Variable, arg]) -> instr:
@@ -763,32 +919,16 @@ class Compiler:
             new_instrs.append(self.assign_homes_instr(s, home))
         return new_instrs
 
-    # def assign_homes(self, pseudo_x86: X86Program) -> X86Program:
-    #     match pseudo_x86:
-    #         case X86Program(body):
-    #             # first, uncover_live, return Dict[instr, Set[location]]
-    #             liveness = self.uncover_live(pseudo_x86)
-    #             # second, build_interference, return UndirectedAdjList
-    #             interference_graph = self.build_interference(pseudo_x86, liveness)
-    #             # allocate_registers, return X86Program(which replace some variable into register)
-    #             p = self.allocate_registers(pseudo_x86, interference_graph)
-    #             # assign the new home on new body
-    #             variables = self.collect_locals_instrs(p.body)
-    #             home = {}
-    #             for i, x in enumerate(variables):
-    #                 home[x] = self.gen_stack_access(i)
-    #             new_body = self.assign_homes_instrs(p.body, home)
-    #             new_pseudo_x86 = X86Program(new_body)
-    #             new_pseudo_x86.stack_space = align(8 * (len(variables) + len(pseudo_x86.used_callee)), 16)
-    #             new_pseudo_x86.used_callee = pseudo_x86.used_callee
-    #             print(f"CALLEE SAVED REGISTER and VARIABLE SIZE are, {new_pseudo_x86.used_callee}, {variables}")
-    #             return new_pseudo_x86
+    
+    
     def assign_homes(self, pseudo_x86: X86Program) -> X86Program:
         live_after = self.uncover_live(pseudo_x86)
         graph = self.build_interference(pseudo_x86, live_after)
         #trace(graph.show().source)
         #trace("")
-        return self.allocate_registers(pseudo_x86, graph)
+        return self.allocate_registers(pseudo_x86, graph) # allocate_registers will help assign_homes to finish the job
+    
+    
     ###########################################################################
     # Patch Instructions
     ###########################################################################
@@ -821,6 +961,26 @@ class Compiler:
                     return []
                 else:
                     return [i]
+            # Handle the 'cmpq' instruction
+            case Instr('cmpq', [s,t]): # the second argu of cmpq must not be immediate
+                if isinstance(t, Immediate): 
+                    mov_instr = Instr('movq', [t, Reg('rax')])
+                    cmp_instr = Instr('cmpq', [s,Reg('rax')])
+                    return [mov_instr, cmp_instr]
+                elif isinstance(s, Deref) and isinstance(t, Deref): # Two memory reference in 'cmpq'
+                    mov_instr = Instr('movq', [t, Reg('rax')])
+                    cmp_instr = Instr('cmpq', [s, Reg('rax')])
+                    return [mov_instr, cmp_instr]
+                else:
+                    return [i]
+                
+            case Instr('movzbq', [s, t]):
+                if isinstance(t, Reg):
+                    return [i]
+                else:  # Handle the case where the second argument of 'movzbq' is not a register
+                    raise Exception("Second argument of 'movzbq must be a register'")
+
+                
             case _:
                 # add instration into list
                 return [i]
@@ -854,6 +1014,8 @@ class Compiler:
     # Prelude & Conclusion
     ###########################################################################
 
+
+
     def prelude_and_conclusion(self, p: X86Program) -> X86Program:
         # YOUR CODE HERE
         # The problem is that how to know the size I need to allocate.
@@ -862,21 +1024,32 @@ class Compiler:
         if isinstance(p.body, dict):
             new_body = {}
             for label, instrs in p.body.items():
+                if label == 'main':
                 # instructions for stack allocations
-                prelude = [
-                    Instr("pushq", [Reg("rbp")]),
-                    Instr("movq", [Reg("rsp"), Reg("rbp")]),
-                    Instr("subq", [Immediate(p.stack_space), Reg("rsp")])
-                ]
-                # instructions for restore stack allocations
-                conclusion = [
-                    Instr("addq", Immediate(p.stack_space), Reg("rsp")),
-                    # Instr("mov", ["%rbp", "%rsp"]), # is equal to addq if %rbp 's value is not changed
-                    Instr("popq", [Reg("rbp")]),
-                    Instr("retq", [])
-                ]
+                    prelude = [
+                        Instr("pushq", [Reg("rbp")]),
+                        Instr("movq", [Reg("rsp"), Reg("rbp")]),
+                        Instr("subq", [Immediate(p.stack_space), Reg("rsp")])
+                    ]
                 
-                new_body[label] = prelude + instrs + conclusion          
+                    # Jump to the start block after the prelude in 'main'
+                    start_block_label = 'start'
+                    jump_to_start = Jump(start_block_label)
+                            
+                    # instructions for restore stack allocations
+                    conclusion = [
+                        label_name(generate_name("conclusion")),  # Labeled block for conclusion
+                        Instr("addq", Immediate(p.stack_space), Reg("rsp")),
+                        # Instr("mov", ["%rbp", "%rsp"]), # is equal to addq if %rbp 's value is not changed
+                        Instr("popq", [Reg("rbp")]),
+                        Instr("retq", [])
+                    ]
+                    # Place the prelude, jump to start, and conclusion in main
+                    new_body[label] = prelude + [jump_to_start] + instrs + conclusion       
+                else:
+                    # For other functions, keep the original instructions
+                    new_body[label] = instrs   
+                    
         else:  
             # If we have a single main function
             starting_offset = 8 * len(p.used_callee) - p.stack_space
@@ -885,11 +1058,11 @@ class Compiler:
                 Instr("movq", [Reg("rsp"), Reg("rbp")]),
                 Instr("subq", [Immediate(p.stack_space), Reg("rsp")])
             ]
+            
             # Loop through the callee-saved registers to save them
             for reg in p.used_callee:
                 prelude.append(Instr("movq", [Reg(reg), Deref("rbp", starting_offset)]))
                 starting_offset -= 8
-            conclusion = []
 
             # Reset starting offset for restoration of callee-saved registers
             starting_offset = 8 * len(p.used_callee) - p.stack_space
@@ -901,6 +1074,7 @@ class Compiler:
             
             conclusion.extend(
                 [
+                label_name(generate_name("conclusion")),  # Labeled block for conclusion
                 Instr("addq", [Immediate(p.stack_space), Reg("rsp")]),
                 Instr("popq", [Reg("rbp")]),
                 Instr("retq", [])
