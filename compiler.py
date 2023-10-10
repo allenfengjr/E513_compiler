@@ -216,7 +216,6 @@ class Compiler:
         for stmt in p.body:
             rco_statements = self.rco_stmt(stmt)
             transformed_statements += rco_statements
-            # print(f"the stmts are, {[i.__class__ for i in rco_statements]}, value is {rco_statements}")
         #Create a new Module with the transformed statements.
         transformed_program = Module(transformed_statements)
         return transformed_program
@@ -244,7 +243,7 @@ class Compiler:
                 test_exp = self.explicate_pred(test, body_exp, orelse_exp, basic_blocks)
                 return test_exp
             case Call(func, args):
-                stmts = [e] + cont
+                stmts = [Expr(e)] + cont
                 call_block = self.create_block(stmts, basic_blocks)
                 return call_block
             case Begin(body, result):
@@ -264,7 +263,7 @@ class Compiler:
         match rhs:
             case IfExp(test, body, orelse):
                 cont_block = self.create_block(cont, basic_blocks)
-                print(f"Assign body is {body}, orelse is {orelse}, test is {test}, test type is {test.__class__}")
+                #print(f"Assign body is {body}, orelse is {orelse}, test is {test}, test type is {test.__class__}")
                 # two branch
                 body_ass = self.explicate_assign(body, lhs, cont_block, basic_blocks)
                 orelse_ass = self.explicate_assign(orelse, lhs, cont_block, basic_blocks)
@@ -273,13 +272,11 @@ class Compiler:
             case Begin(body, result):
                 # in what situation, Begin will on the rhs of Assign?
                 # Anyway, if it is on the rhs, we deal with is reversely as above
-                print("Begin is here")
                 cont_block = self.create_block(cont, basic_blocks)
                 for b in reversed(body):
                     cont_block = self.explicate_stmt(b, cont_block, basic_blocks) # merge  
                 return cont_block
             case _:
-                print(f"Assign lhs is {lhs}, rhs is {rhs}")
                 return [Assign([lhs], rhs)] + cont
     
     def explicate_pred(self, cnd, thn, els, basic_blocks) -> stmt:
@@ -296,8 +293,11 @@ class Compiler:
                 return self.explicate_pred(operand, els, thn, basic_blocks)
             case IfExp(test, body, orelse):
                 # remove nested if, use test instead of the whole IfExp to decide branch
-                thn_block = self.explicate_effect(body, thn, basic_blocks)
-                els_block = self.explicate_effect(orelse, els, basic_blocks)
+                # print(f"Pred body is {body}, orelse is {orelse}, test is {test}, test type is {test.__class__}")
+                thn_b = self.create_block(thn, basic_blocks)
+                els_b = self.create_block(els, basic_blocks)
+                thn_block = self.explicate_pred(body, thn_b, els_b,basic_blocks)
+                els_block = self.explicate_pred(orelse, els_b, thn_b,basic_blocks)
                 return self.explicate_pred(test, thn_block, els_block, basic_blocks)
             case Begin(body, result):
                 # here "result" is the cnd(strange...)
@@ -314,17 +314,22 @@ class Compiler:
                         self.create_block(thn, basic_blocks))]
     
     def explicate_stmt(self, s, cont, basic_blocks):
-        print(f'stmt is {s}, type is {s.__class__}')
+        # print(f'stmt is {s}, type is {s.__class__}')
         match s:
             case Assign([lhs], rhs):
                 return self.explicate_assign(rhs, lhs, cont, basic_blocks)
             case Expr(value):
                 return self.explicate_effect(value, cont, basic_blocks)
             case If(test, body, orelse):
-                thn = self.explicate_stmt(body, cont, basic_blocks)
-                els = self.explicate_stmt(orelse, cont, basic_blocks)
-                return self.explicate_pred(test, thn, els, basic_blocks)
+                body_b = cont
+                for b in reversed(body):
+                    body_b = self.explicate_stmt(b, body_b, basic_blocks)
+                orelse_b = cont
+                for e in reversed(orelse):
+                    orelse_b = self.explicate_stmt(e, orelse_b, basic_blocks)
+                return self.explicate_pred(test, body_b, orelse_b, basic_blocks)
             case _:
+                print(f"stmt is {s}, type is {s.__class__}")
                 raise Exception("Unhandle stmt in explicate control")
     
     def explicate_control(self, p):

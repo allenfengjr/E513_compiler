@@ -90,6 +90,7 @@ class TypeCheckCif:
       case Expr(value):
         self.type_check_exp(value, env)
       case _:
+        print(f"The unexpected type is {s}, {s.__class__}")
         raise Exception('error in type_check_stmt, unexpected ' + repr(s))
     
   def type_check_tail(self, s, env):

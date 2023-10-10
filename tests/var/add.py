@@ -1,3 +1,9 @@
 x = input_int()
-y = input_int()
-print(((y + 2) if (x == 0 if x < 1 else x == 2) else (y + 10)))
+if not(x == 1):
+    if x == 0:
+        y = 42
+    else:
+        y = 777
+else:
+    y = 0
+print(y)
