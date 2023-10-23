@@ -35,11 +35,11 @@ import interp_Lif
 import type_check_Lif
 import interp_Cif
 import type_check_Cif
-from eval_x86 import interp_x86
+from eval_x86 import interp_x86 # Autograde file structure is different from local repo
 from dataflow_analysis import analyze_dataflow
 
 
-class Compiler(register_allocator.RegisterAllocator):
+class Conditionals(register_allocator.RegisterAllocator):
 
     ############################################################################
     # Shrink

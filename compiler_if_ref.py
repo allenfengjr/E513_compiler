@@ -69,7 +69,7 @@ class Conditionals(register_allocator.RegisterAllocator):
             case Constant(value):
                 return e
             case BinOp(left, op, right):
-                l = self.shrink_exp(left);
+                l = self.shrink_exp(left)
                 r = self.shrink_exp(right)
                 return BinOp(l, op, r)
             case UnaryOp(op, operand):
@@ -81,7 +81,7 @@ class Conditionals(register_allocator.RegisterAllocator):
                 return Call(fun, new_args)
             case IfExp(test, body, orelse):
                 tst = self.shrink_exp(test)
-                bod = self.shrink_exp(body);
+                bod = self.shrink_exp(body)
                 els = self.shrink_exp(orelse)
                 return IfExp(tst, bod, els)
             # Replace And with IfExp
@@ -95,7 +95,7 @@ class Conditionals(register_allocator.RegisterAllocator):
                 r = self.shrink_exp(values[1])
                 return IfExp(l, Constant(True), r)
             case Compare(left, [op], [right]):
-                l = self.shrink_exp(left);
+                l = self.shrink_exp(left)
                 r = self.shrink_exp(right)
                 return Compare(l, [op], [r])
             case _:
@@ -174,7 +174,7 @@ class Conditionals(register_allocator.RegisterAllocator):
                   ss = self.explicate_stmt(s, ss, basic_blocks)
                 return ss
             case IfExp(test, body, orelse):
-                goto = create_block(cont, basic_blocks)
+                goto = self.create_block(cont, basic_blocks)
                 new_body = self.explicate_effect(body, goto, basic_blocks)
                 new_orelse = self.explicate_effect(orelse, goto, basic_blocks)
                 return self.explicate_pred(test, new_body, new_orelse,
