@@ -1,9 +1,4 @@
-x = input_int()
-if not(x == 1):
-    if x == 0:
-        y = 42
-    else:
-        y = 777
-else:
-    y = 0
-print(y)
+x = 0
+while (True if input_int() == 5 else False):
+    x = (x + 42)
+    print(x)

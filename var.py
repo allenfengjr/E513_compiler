@@ -21,6 +21,7 @@ import os
 from typing import List, Set, Dict
 import interp_Lvar
 import type_check_Lvar
+from eval_x86 import interp_x86
 
 Binding = tuple[Name, expr]
 Temporaries = List[Binding]

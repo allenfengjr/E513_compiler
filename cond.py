@@ -35,9 +35,7 @@ import interp_Lif
 import type_check_Lif
 import interp_Cif
 import type_check_Cif
-from eval_x86 import interp_x86 # Autograde file structure is different from local repo
-from dataflow_analysis import analyze_dataflow
-
+from eval_x86 import interp_x86
 
 class Conditionals(register_allocator.RegisterAllocator):
 
@@ -71,7 +69,7 @@ class Conditionals(register_allocator.RegisterAllocator):
             case Constant(value):
                 return e
             case BinOp(left, op, right):
-                l = self.shrink_exp(left)
+                l = self.shrink_exp(left);
                 r = self.shrink_exp(right)
                 return BinOp(l, op, r)
             case UnaryOp(op, operand):
@@ -83,7 +81,7 @@ class Conditionals(register_allocator.RegisterAllocator):
                 return Call(fun, new_args)
             case IfExp(test, body, orelse):
                 tst = self.shrink_exp(test)
-                bod = self.shrink_exp(body)
+                bod = self.shrink_exp(body);
                 els = self.shrink_exp(orelse)
                 return IfExp(tst, bod, els)
             # Replace And with IfExp
@@ -97,7 +95,7 @@ class Conditionals(register_allocator.RegisterAllocator):
                 r = self.shrink_exp(values[1])
                 return IfExp(l, Constant(True), r)
             case Compare(left, [op], [right]):
-                l = self.shrink_exp(left)
+                l = self.shrink_exp(left);
                 r = self.shrink_exp(right)
                 return Compare(l, [op], [r])
             case _:
@@ -176,7 +174,7 @@ class Conditionals(register_allocator.RegisterAllocator):
                   ss = self.explicate_stmt(s, ss, basic_blocks)
                 return ss
             case IfExp(test, body, orelse):
-                goto = self.create_block(cont, basic_blocks)
+                goto = create_block(cont, basic_blocks)
                 new_body = self.explicate_effect(body, goto, basic_blocks)
                 new_orelse = self.explicate_effect(orelse, goto, basic_blocks)
                 return self.explicate_pred(test, new_body, new_orelse,
@@ -430,30 +428,25 @@ class Conditionals(register_allocator.RegisterAllocator):
             case X86Program(body):
                 live_before = {}
                 live_after = {}
-
                 cfg = self.blocks_to_graph(body)
-                '''
-                In L_if, we can use "topological_sort" because the graph has cricles.
-                We then use "analyze_dataflow" to replace it. It requires a topology of graph of blocks, 
-                and functions to analyze uncover live 
-                '''
-                def transfer(label, live_after_block) -> Set[location]:
-                    if label == label_name('conclusion'):
-                        return {Reg('rax'), Reg('rsp')}
-                    
-                    live_before_succ = live_after_block
-                    for i in reversed(body[label]):
-                        self.uncover_live_instr(i, live_before_succ, live_before, live_after)
-                        live_before_succ = live_before[i]
-                    return live_before_succ
-
-                analyze_dataflow(cfg, transfer, set(), lambda x, y: x.union(y))
-                
+                cfg_trans = transpose(cfg)
+                live_before_block = \
+                    {label_name('conclusion'): {Reg('rax'), Reg('rsp')}}
+                for l in topological_sort(cfg_trans):
+                    if l != label_name('conclusion'):
+                        adj_live = [live_before_block[v] \
+                                    for v in cfg.adjacent(l)]
+                        live_before_succ = set().union(*adj_live)
+                        for i in reversed(body[l]):
+                            self.uncover_live_instr(i, live_before_succ,
+                                                    live_before, live_after)
+                            live_before_succ = live_before[i]
+                        live_before_block[l] = live_before_succ
                 trace("uncover live:")
                 self.trace_live(p, live_before, live_after)
                 return live_after
 
-            
+
     ############################################################################
     # Build Interference
     ############################################################################

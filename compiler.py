@@ -61,6 +61,10 @@ class Compiler(register_allocator.RegisterAllocator):
                 return If(self.shrink_exp(test),
                           [self.shrink_stmt(s) for s in body],
                           [self.shrink_stmt(s) for s in orelse])
+            case While(test,body,[]):
+                shrink_test = self.shrink_exp(test)
+                shrink_body = [self.shrink_stmt(i) for i in body]
+                return While(shrink_test, shrink_body, [])
             case _:
                 raise Exception('shrink_stmt: unexpected: ' + repr(s))
 
@@ -115,6 +119,13 @@ class Compiler(register_allocator.RegisterAllocator):
                 sss2 = [self.rco_stmt(s) for s in orelse]
                 return self.gen_assigns(bs) + \
                        [If(test, sum(sss1, []), sum(sss2, []))]
+            case While(test, body, orelse):  # Add the while statement condition
+                (test, bs) = self.rco_exp(test, False)
+                sss1 = [self.rco_stmt(s) for s in body]
+                sss2 = [self.rco_stmt(s) for s in orelse]
+                sss1.append(self.gen_assigns(bs))
+                return self.gen_assigns(bs) + \
+                        [While(test, sum(sss1, []), sum(sss2, []))]
             case _:
                 return super().rco_stmt(s)
 
@@ -260,6 +271,34 @@ class Compiler(register_allocator.RegisterAllocator):
                     new_els = self.explicate_stmt(s, new_els, basic_blocks)
                 return self.explicate_pred(test, new_body, new_els,
                                            basic_blocks)
+            
+            case While(test, body, _):
+                loop_start_label = label_name(generate_name('loop_start'))
+                loop_end_label = label_name(generate_name('loop_end'))
+                
+                loop_body = [Goto(loop_start_label)]
+                for stmt in reversed(body):
+                    loop_body = self.explicate_stmt(stmt, loop_body, basic_blocks)
+                # Add the loop start block to basic blocks
+                basic_blocks[loop_start_label] = loop_body
+                # Use explicate_pred to process the test condition
+                loop_cond = self.explicate_pred(test, loop_body, [Goto(loop_end_label)], basic_blocks)  
+
+                return loop_cond
+
+               
+                
+            # case While(test, body, orelse):  # Add the while statement condition
+            #     start_label = label_name(generate_name('loop_start'))          # labels for the start and end of the loop     
+            #     end_label = label_name(generate_name('loop_end'))
+            #     loop_condition = self.explicate_pred(test, [Goto, [Goto(end_label)], basic_blocks)   # use explicate_pred to process the loop condition
+            #     loop_body = [Goto(start_label)] 
+            #     loop_orelse = [Goto(end_label)]
+            #     for s in reversed(body):    # use explicate_pred to process the loop condition
+            #         loop_body = self.explicate_stmt(s, loop_body, basic_blocks)
+            #         loop_orelse = self.explicate_stmt(s, loop_orelse, basic_blocks)
+            #     basic_blocks[start_label] = loop_condition + loop_body +loop_orelse
+            #     return [Goto(start_label)] #jump to the start of the loop to begin
             case _:
                 raise Exception('explicate_stmt: unexpected ' + repr(s))
 
@@ -432,7 +471,6 @@ class Compiler(register_allocator.RegisterAllocator):
                 live_after = {}
 
                 cfg = self.blocks_to_graph(body)
-                cfg_trans = transpose(cfg)
 
                 def transfer(label, live_after_block) -> Set[location]:
                     if label == label_name('conclusion'):
@@ -444,7 +482,7 @@ class Compiler(register_allocator.RegisterAllocator):
                         live_before_succ = live_before[i]
                     return live_before_succ
 
-                analyze_dataflow(cfg_trans, transfer, set(), lambda x, y: x.union(y))
+                analyze_dataflow(cfg, transfer, set(), lambda x, y: x.union(y))
                 
                 trace("uncover live:")
                 self.trace_live(p, live_before, live_after)
