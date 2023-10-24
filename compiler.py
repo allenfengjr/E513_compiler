@@ -461,6 +461,7 @@ class Compiler(register_allocator.RegisterAllocator):
                 live_after = {}
 
                 cfg = self.blocks_to_graph(body)
+                cfg_trans = transpose(cfg)
 
                 def transfer(label, live_after_block) -> Set[location]:
                     if label == label_name('conclusion'):
@@ -472,7 +473,7 @@ class Compiler(register_allocator.RegisterAllocator):
                         live_before_succ = live_before[i]
                     return live_before_succ
 
-                analyze_dataflow(cfg, transfer, set(), lambda x, y: x.union(y))
+                analyze_dataflow(cfg_trans, transfer, set(), lambda x, y: x.union(y))
                 
                 trace("uncover live:")
                 self.trace_live(p, live_before, live_after)

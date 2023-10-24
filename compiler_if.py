@@ -300,11 +300,17 @@ class Compiler:
             case Begin(body, result):
                 # here "result" is the cnd(strange...)
                 # still, we add body into cont(both thn and els?)
+                '''
                 for b in reversed(body):
                     thn_block = self.explicate_effect(b, thn, basic_blocks)
                     els_block = self.explicate_effect(b, els, basic_blocks)
                 #return [If(result, thn_block, els_block)]
                 return self.explicate_pred(result, thn_block, els_block, basic_blocks)
+                '''
+                ss = self.explicate_pred(result, thn, els, basic_blocks)
+                for s in reversed(body):
+                    ss = self.explicate_stmt(s, ss, basic_blocks)
+                return ss
 
             case _:
                 return [If(Compare(cnd, [Eq()], [Constant(False)]),
