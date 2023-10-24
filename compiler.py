@@ -271,34 +271,24 @@ class Compiler(register_allocator.RegisterAllocator):
                     new_els = self.explicate_stmt(s, new_els, basic_blocks)
                 return self.explicate_pred(test, new_body, new_els,
                                            basic_blocks)
-            
-            case While(test, body, _):
-                loop_start_label = label_name(generate_name('loop_start'))
-                loop_end_label = label_name(generate_name('loop_end'))
+            case While(test, body, _): # _ is used because we don't expect else clause in while
+                # Create the while block and end of while block labels
+                while_label = label_name(generate_name('while'))
+                end_while_label = label_name(generate_name('end_while'))
                 
-                loop_body = [Goto(loop_start_label)]
+                # Convert the body of the while loop to jump back to the while label after executing
+                while_body = [Goto(while_label)]
                 for stmt in reversed(body):
-                    loop_body = self.explicate_stmt(stmt, loop_body, basic_blocks)
-                # Add the loop start block to basic blocks
-                basic_blocks[loop_start_label] = loop_body
-                # Use explicate_pred to process the test condition
-                loop_cond = self.explicate_pred(test, loop_body, [Goto(loop_end_label)], basic_blocks)  
-
-                return loop_cond
-
-               
+                    while_body = self.explicate_stmt(stmt, while_body, basic_blocks)
                 
-            # case While(test, body, orelse):  # Add the while statement condition
-            #     start_label = label_name(generate_name('loop_start'))          # labels for the start and end of the loop     
-            #     end_label = label_name(generate_name('loop_end'))
-            #     loop_condition = self.explicate_pred(test, [Goto, [Goto(end_label)], basic_blocks)   # use explicate_pred to process the loop condition
-            #     loop_body = [Goto(start_label)] 
-            #     loop_orelse = [Goto(end_label)]
-            #     for s in reversed(body):    # use explicate_pred to process the loop condition
-            #         loop_body = self.explicate_stmt(s, loop_body, basic_blocks)
-            #         loop_orelse = self.explicate_stmt(s, loop_orelse, basic_blocks)
-            #     basic_blocks[start_label] = loop_condition + loop_body +loop_orelse
-            #     return [Goto(start_label)] #jump to the start of the loop to begin
+                # Process the condition and add the while block. If condition fails, jump to end_while_label
+                test_block = self.explicate_pred(test, while_body, [Goto(end_while_label)], basic_blocks)
+                basic_blocks[while_label] = test_block
+                
+                # Add the end_while_label to basic blocks to continue execution after the loop
+                basic_blocks[end_while_label] = cont
+                
+                return [Goto(while_label)]
             case _:
                 raise Exception('explicate_stmt: unexpected ' + repr(s))
 
