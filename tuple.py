@@ -125,19 +125,48 @@ class Compiler(loop.WhileLoops):
     ############################################################################
     def rco_exp(self, e: expr, need_atomic: bool) -> Tup[expr, Temporaries]:
         match e:
-            case Allocate():
-                pass
-            case Subscript():
-                pass
+            case GlobalValue(name):
+                # GlobalValue is already atomic, but if we need an atomic context, we must assign it to a temporary variable
+                if need_atomic:
+                    tmp = Name(generate_name('tmp'))
+                    return tmp, [(tmp, GlobalValue(name))]
+                else:
+                    return GlobalValue(name), []
+            case Allocate(length, ty):
+                # Allocate is already atomic, but if we need an atomic context, we must assign it to a temporary variable
+                if need_atomic:
+                    tmp = Name(generate_name('tmp'))
+                    return tmp, [(tmp, Allocate(length, ty))]
+                else:
+                    return Allocate(length, ty), []
+            case Subscript(exp, idx, Load()):
+                # Both exp and idx must be atomic
+                (rco_sub, tmp_exp) = self.rco_exp(exp, True)
+                (rco_idx, tmp_idx) = self.rco_exp(idx, True)
+                if need_atomic:
+                    tmp = Name(generate_name('tmp'))
+                    return tmp, tmp_exp + tmp_idx + [(tmp, Subscript(rco_sub, rco_idx, Load()))]
+                else:
+                    return Subscript(rco_sub, rco_idx, Load()), tmp_exp + tmp_idx
+            case Call(Name('len'), [exp]):
+                # The expression for len must be atomic
+                (rco_len, tmp_exp) = self.rco_exp(exp, True)
+                if need_atomic:
+                    tmp = Name(generate_name('tmp'))
+                    return tmp, tmp_exp + [(tmp, Call(Name('len'), [rco_len]))]
+                else:
+                    return Call(Name('len'), [rco_len]), tmp_exp
             case _:
                 return super().rco_exp(e, need_atomic)
-    
+
     def rco_stmt(self, s: stmt) -> List[stmt]:
         match s:
-            case Collect():
-                pass
+            case Collect(size):
+                # Collect is already a statement and doesn't need transformation
+                return [Collect(size)]
             case _:
                 return super().rco_stmt(s)
+
 
     ############################################################################
     # Explicate Control
@@ -151,15 +180,8 @@ class Compiler(loop.WhileLoops):
     def explicate_stmt(self, s: stmt, cont: List[stmt],
                        blocks: Dict[str, List[stmt]]) -> List[stmt]:
         match s:
-            case While(test, body, []):
-                label = label_name(generate_name('loop'))
-                new_body = [Goto(label)]
-                for s in reversed(body):
-                    new_body = self.explicate_stmt(s, new_body, blocks)
-                goto_cont = self.create_block(cont, blocks)
-                loop = self.explicate_pred(test, new_body, goto_cont, blocks)
-                blocks[label] = loop
-                return [Goto(label)]
+            case Collect(size):
+                pass
             case _:
                 return super().explicate_stmt(s, cont, blocks)
 
