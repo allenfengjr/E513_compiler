@@ -4,43 +4,41 @@ import sys
 sys.path.append('../E513_compiler')
 sys.path.append('../E513_compiler/interp_x86')
 
-import compiler
-import interp_Lvar
-import interp_Lwhile
-import interp_Cif
-import type_check_Lvar
-import type_check_Lwhile
-import type_check_Cif
+import tuple
+import interp_Ltup
+import interp_Ctup
+import type_check_Ctup
+import type_check_Ltup
 from utils import run_tests, run_one_test, enable_tracing
 from interp_x86.eval_x86 import interp_x86
 
 enable_tracing()
 
-compiler = compiler.Compiler()
+compiler = tuple.Compiler()
 
-typecheck_Lwhile = type_check_Lwhile.TypeCheckLwhile().type_check
-typecheck_Cif = type_check_Cif.TypeCheckCif().type_check
+typecheck_Ltup = type_check_Ltup.TypeCheckLtup().type_check
+typecheck_Ctup = type_check_Ctup.TypeCheckCtup().type_check
 typecheck_dict = {
-    'source': typecheck_Lwhile,
-    'shrink': typecheck_Lwhile,
-    'uniquify': typecheck_Lwhile,
-    'remove_complex_operands': typecheck_Lwhile,
-    'explicate_control': typecheck_Cif,
+    'source': typecheck_Ltup,
+    'shrink': typecheck_Ltup,
+    'expose_allocation': typecheck_Ltup,
+    'remove_complex_operands': typecheck_Ltup,
+    'explicate_control': typecheck_Ctup,
 }
-interpLwhile = interp_Lwhile.InterpLwhile().interp
-interpCif = interp_Cif.InterpCif().interp
+interpLtup = interp_Ltup.InterpLtup().interp
+interpCtup = interp_Ctup.InterpCtup().interp
 interp_dict = {
-    'shrink': interpLwhile,
-    'uniquify': interpLwhile,
-    'remove_complex_operands': interpLwhile,
-    'explicate_control': interpCif,
+    'shrink': interpLtup,
+    'expose_allocation': interpLtup,
+    'remove_complex_operands': interpLtup,
+    'explicate_control': interpCtup,
     'select_instructions': interp_x86,
     'assign_homes': interp_x86,
     'patch_instructions': interp_x86,
 }
 
 if True:
-    run_tests('var', compiler, 'if',
+    run_tests('var', compiler, 'tup',
               typecheck_dict,
               interp_dict)
 else:
