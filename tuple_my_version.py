@@ -114,6 +114,12 @@ class Compiler(loop.WhileLoops):
                 return Begin(init_stmts, alloc_var)
             case Subscript(exp, index, ctx):
                 return Subscript(self.expose_alloc_exp(exp), index, ctx)
+            case Call(Name('len'),[exp]):
+                return Call(Name('len', [self.expose_alloc_exp(exp)]))
+            case IfExp(test, body, orelse):
+                return IfExp(self.expose_alloc_exp(test),
+                             self.expose_alloc_exp(body),
+                             self.expose_alloc_exp(orelse))
             case _:
                 # Handle other statements that do not involve tuple creation
                 return e
@@ -140,7 +146,8 @@ class Compiler(loop.WhileLoops):
                 else:
                     return Allocate(length, ty), []
             case Subscript(exp, idx, Load()):
-                # Both exp and idx must be atomic
+                # Both exp and idx must be atomic, 
+                # But I think idx should always be atomic, is it necessary?
                 (rco_sub, tmp_exp) = self.rco_exp(exp, True)
                 (rco_idx, tmp_idx) = self.rco_exp(idx, True)
                 if need_atomic:
@@ -173,17 +180,51 @@ class Compiler(loop.WhileLoops):
     ############################################################################
     def explicate_assign(self, e: expr, x: Variable, cont: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
         match e:
-            case Tuple(es, Load()):
-                pass
+            case Allocate(length, ty):
+                # Handle memory allocation
+                return [Assign([x], e)] + cont
+            case GlobalValue(name):
+                # Handle global value access
+                return [Assign([x], e)] + cont
+            case Subscript(exp, idx, Load()):
+                # Handle tuple element access
+                return [Assign([x], e)] + cont
             case _:
                 return super().explicate_assign(e, x, cont, basic_blocks)
-    def explicate_stmt(self, s: stmt, cont: List[stmt],
-                       blocks: Dict[str, List[stmt]]) -> List[stmt]:
+    
+    def explicate_pred(self, cnd: expr, thn: List[stmt], els: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
+        match cnd:
+            case Subscript(exp, idx, Load()):
+                # Directly use the subscript as the test condition since all expressions are atomic
+                test = Subscript(exp, idx, Load())
+                goto_thn = self.create_block(thn, basic_blocks)
+                goto_els = self.create_block(els, basic_blocks)
+                return [If(test, goto_thn, goto_els)]
+            case _:
+                return super().explicate_pred(cnd, thn, els, basic_blocks)
+            
+    def explicate_stmt(self, s: stmt, cont: List[stmt], basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
         match s:
             case Collect(size):
-                pass
+                # Handle garbage collection
+                return [s] + cont
+            case Assign([Subscript(exp, idx, Store())], value):
+                # Assignment to a tuple element; expressions are already atomic
+                return [Assign([Subscript(exp, idx, Store())], value)] + cont
             case _:
-                return super().explicate_stmt(s, cont, blocks)
+                return super().explicate_stmt(s, cont, basic_blocks)
+
+    def explicate_control(self, p: Module) -> CProgram:
+        match p:
+            case Module(body):
+                new_body = [Return(Constant(0))]
+                basic_blocks = {}
+                for s in reversed(body):
+                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
+                basic_blocks[label_name('start')] = new_body 
+                return CProgram(basic_blocks)
+            case _:
+                raise Exception('explicate_control: unexpected ' + repr(p))
 
     ############################################################################
     # Uncover Live

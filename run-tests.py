@@ -4,7 +4,7 @@ import sys
 sys.path.append('../E513_compiler')
 sys.path.append('../E513_compiler/interp_x86')
 
-import tuple
+import tuple_my_version
 import interp_Ltup
 import interp_Ctup
 import type_check_Ctup
@@ -14,7 +14,7 @@ from interp_x86.eval_x86 import interp_x86
 
 enable_tracing()
 
-compiler = tuple.Compiler()
+compiler = tuple_my_version.Compiler()
 
 typecheck_Ltup = type_check_Ltup.TypeCheckLtup().type_check
 typecheck_Ctup = type_check_Ctup.TypeCheckCtup().type_check
