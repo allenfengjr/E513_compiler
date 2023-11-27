@@ -16,7 +16,7 @@ import type_check_Ctup
 import interp_Ltup
 import interp_Ctup
 
-class Functions(tuples.Tuples):
+class Compiler(tuples.Tuples):
     ###########################################################################
     # Shrink
     ###########################################################################
@@ -43,10 +43,10 @@ class Functions(tuples.Tuples):
 
     def reveal_function_stmt(self, s: stmt) -> stmt:
         match s:
-            case FunctionDef(name, args, body, _, returns, _):
-                self.function_arity_map[name] = len(args.args)
+            case FunctionDef(name, args_obj, body, _, returns, _):
+                self.function_arity_map[name] = len(args_obj)
                 new_body = [self.reveal_function_stmt(stmt) for stmt in body]
-                return FunctionDef(name, args, new_body, None, returns, None)
+                return FunctionDef(name, args_obj, new_body, None, returns, None)
             case Expr(value):
                 return Expr(self.reveal_function_exp(value))
             case Return(value):
@@ -80,20 +80,23 @@ class Functions(tuples.Tuples):
 
     def limit_function_stmt(self, s: stmt) -> stmt:
         match s:
-            case FunctionDef(name, args, body, _, returns, _):
-                if len(args.args) > 6:
+            case FunctionDef(name, args_obj, body, _, returns, _):
+                if len(args_obj) > 6:
                     # Update arguments
-                    new_args = args.args[:5]
-                    rest_args = args.args[5:]
-                    tuple_arg = arg('tup', TupleType([a.annotation for a in rest_args]))
+
+                    # THERE is a bug about the type of "args_obj"
+                    # SHOULD be a 'argument', now is a 'list'
+                    new_args = args_obj[:5]
+                    rest_args = args_obj[5:]
+                    tuple_arg = arg('tup', TupleType([annotation for _, annotation in rest_args]))
                     new_args.append(tuple_arg)
 
                     # Update body
                     new_body = [self.limit_function_stmt_in_body(stmt, rest_args) for stmt in body]
-                    return FunctionDef(name, arguments(new_args, args.vararg, args.kwonlyargs, args.kw_defaults, args.kwarg, args.defaults), new_body, None, returns, None)
+                    return FunctionDef(name, new_args, new_body, None, returns, None)
                 else:
                     new_body = [self.limit_function_stmt(stmt) for stmt in body]
-                    return FunctionDef(name, args, new_body, None, returns, None)
+                    return FunctionDef(name, args_obj, new_body, None, returns, None)
             case _:
                 return s  # Other statements remain unchanged
 
@@ -125,7 +128,20 @@ class Functions(tuples.Tuples):
                 return e
             
     ###########################################################################
-    # Limit Functions
+    # Expose Allocation
+    ###########################################################################
+    def expose_alloc_stmt(self, s: stmt) -> stmt:
+        match s:
+            case FunctionDef(name, args, body, decorator_list, returns, type_comment):
+                new_body = [self.expose_alloc_stmt(stmt) for stmt in body]
+                return FunctionDef(name, args, new_body, decorator_list, returns, type_comment)
+            case Return(value):
+                return Return(self.expose_alloc_exp(value))
+            case _:
+                return super().expose_alloc_stmt(s)
+
+    ###########################################################################
+    # RCO
     ###########################################################################
 
     def rco_exp(self, e: expr, need_atomic: bool) -> tuple[expr, Temporaries]:
