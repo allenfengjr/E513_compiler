@@ -1,8 +1,6 @@
 from ast import *
-from ast import Dict, List, Module, Set, expr, stmt
+from ast import List, Module, expr, stmt
 from math import floor
-from E513_compiler.utils import CProgram, Dict, List, Set, stmt
-from E513_compiler.x86_ast import X86Program, instr, location
 from utils import *
 from utils import List, Module, expr, stmt
 from x86_ast import *
@@ -18,7 +16,7 @@ import type_check_Ctup
 import interp_Ltup
 import interp_Ctup
 
-class Functions(tuples.Tuples):
+class Compiler(tuples.Tuples):
     ###########################################################################
     # Shrink
     ###########################################################################
@@ -150,7 +148,7 @@ class Functions(tuples.Tuples):
         match e:
             case FunRef(name, arity):
                 if need_atomic:
-                    tmp = Name(self.generate_name('tmp'))
+                    tmp = Name(generate_name('tmp'))
                     return (tmp, [(tmp, e)])
                 else:
                     return (e, [])
@@ -163,7 +161,7 @@ class Functions(tuples.Tuples):
                     temporaries.extend(temps)
                 new_e = Call(func, new_args)
                 if need_atomic:
-                    tmp = Name(self.generate_name('tmp'))
+                    tmp = Name(generate_name('tmp'))
                     return (tmp, temporaries + [(tmp, new_e)])
                 else:
                     return (new_e, temporaries)
@@ -210,14 +208,6 @@ class Functions(tuples.Tuples):
             case _:
                 return super().explicate_pred(cnd, thn, els, basic_blocks)
             
-    def explicate_stmt(self, s: stmt, cont: List[stmt],
-                       basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
-        match s:
-            case Collect(amount):
-                return [Collect(amount)] + cont
-            case _:
-                return super().explicate_stmt(s, cont, basic_blocks)
-            
     def explicate_tail(self, e: expr, basic_blocks: Dict[str, List[stmt]]) -> List[stmt]:
         match e:
             case Call(func, args):
@@ -242,9 +232,9 @@ class Functions(tuples.Tuples):
         basic_blocks[label] = new_body
         return FunctionDef(label, fdef.args, basic_blocks, return_type=fdef.returns)
     
-    def explicate_control(self, p: Module) -> Module:
+    def explicate_control(self, p: Module) -> CProgram:
         match p:
-            case X86ProgramDefs(defs):
+            case CProgramDefs(defs):
                 basic_blocks = {}
                 new_defs = [self.process_function_def(fdef, basic_blocks) for fdef in defs]
                 return CProgramDefs(new_defs)
