@@ -252,9 +252,10 @@ class Compiler(tuples.Tuples):
             
     def explicate_control(self, p: Module) -> CProgramDefs:
         match p:
-            case CProgramDefs(defs):
+            case Module(body):
                 basic_blocks = {}
-                new_defs = [self.process_function_def(fdef, basic_blocks) for fdef in defs]
+                new_defs = [self.process_function_def(fdef, basic_blocks) for fdef in body]
+                print("Got CProgramDefs")
                 return CProgramDefs(new_defs)
             case _:
                 return super().explicate_control(p)
