@@ -225,14 +225,32 @@ class Compiler(tuples.Tuples):
                 return self.explicate_effect(e, [Return(Constant(0))], basic_blocks) # recursively find the subexpression?
             
     def process_function_def(self, fdef: FunctionDef, basic_blocks: Dict[str, List[stmt]]) -> FunctionDef:
-        new_body = [Return(Constant(0))]
+        new_body = []
         for s in reversed(fdef.body):
             new_body = self.explicate_stmt(s, new_body, basic_blocks)
         label = label_name(fdef.name)
         basic_blocks[label] = new_body
         return FunctionDef(label, fdef.args, basic_blocks, return_type=fdef.returns)
     
-    def explicate_control(self, p: Module) -> CProgram:
+    def explicate_stmt(self, s: stmt, cont, basic_blocks):
+        match s:
+            case FunctionDef(name, params, body, dl, returns, comment):
+                # Process the function definition and its body
+                # processed_fdef = self.process_function_def(s, basic_blocks)
+                new_body = []
+                for stmt in reversed(body):
+                    new_body = self.explicate_stmt(stmt, new_body, basic_blocks)
+                # Create a new FunctionDef with the processed body
+                return [FunctionDef(name, params, new_body, dl, returns, comment)] + cont
+                # return [processed_fdef] + cont
+            
+            case Return(value):
+                return self.explicate_tail(value, basic_blocks) + cont
+            
+            case _:
+                return super().explicate_stmt(s, cont, basic_blocks)
+            
+    def explicate_control(self, p: Module) -> CProgramDefs:
         match p:
             case CProgramDefs(defs):
                 basic_blocks = {}
@@ -265,7 +283,7 @@ class Compiler(tuples.Tuples):
             case _:
                 return super().select_stmt(s)
     
-    def process_function_def(self, fdef: FunctionDef) -> FunctionDef:
+    def process_func_def(self, fdef: FunctionDef) -> FunctionDef:
         # Create start and conclusion blocks for the function
         start_label = f"{fdef.name}_start"
         conclusion_label = f"{fdef.name}_conclusion"
@@ -287,7 +305,7 @@ class Compiler(tuples.Tuples):
     def select_instructions(self, p: CProgramDefs) -> X86ProgramDefs:
         match p:
             case CProgramDefs(defs):
-                new_defs = [self.process_function_def(def_) for def_ in defs]
+                new_defs = [self.process_func_def(def_) for def_ in defs]
                 return X86ProgramDefs(new_defs)
             case _:
                 return super().select_instructions(p)
