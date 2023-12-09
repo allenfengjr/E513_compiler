@@ -2,9 +2,9 @@ import ast
 from ast import *
 from utils import *
 from x86_ast import *
-import functions
+import arrays
 import typing
-from typing import List, Dict
+from typing import List, Dict, Set
 from var import Temporaries
 from register_allocator import arg_registers, caller_save_for_alloc, \
     registers, callee_save_for_alloc
@@ -14,11 +14,10 @@ import type_check_Cfun
 import interp_Lfun
 import interp_Cfun
 
-name_map = {}
-class Compiler(functions.Functions):
+class Functions(arrays.Arrays):
 
     '''
-    The first two resolve Array, not Tuple
+    The first two resolve
     '''
 
     ###########################################################################
@@ -27,21 +26,19 @@ class Compiler(functions.Functions):
 
     def resolve_exp(self, e: expr) -> expr:
       match e:
-        case ast.Lambda(params, body):
-            return ast.Lambda(params, self.resolve_exp(body))
-        case Call(Name('arity'), [func]):
-            return Call(Name('arity', [self.resolve_exp(func)]))
+        case FunRef(name, arity):
+          return FunRef(name, arity)
         case _:
           return super().resolve_exp(e)
 
     
     def resolve_stmt(self, s: stmt) -> stmt:
         match s:
-            case AnnAssign(target, annotation, value, simple):
-                return AnnAssign(self.resolve_exp(target),
-                                 annotation,
-                                 self.resolve_exp(value),
-                                 simple)
+            case FunctionDef(name, params, body, _, returns, _):
+                new_body = [self.resolve_stmt(s) for s in body]
+                return FunctionDef(name, params, new_body, None, returns, None)
+            case Return(value):
+                return Return(self.resolve_exp(value))
             case _:
                 return super().resolve_stmt(s)
     
@@ -51,43 +48,33 @@ class Compiler(functions.Functions):
 
     def check_bounds_exp(self, e: expr) -> expr:
       match e:
-        case ast.Lambda(params, body):
-            return ast.Lambda(params, self.check_bounds_exp(body))
-        case Call(Name('arity'), [func]):
-            return Call(Name('arity'), [self.check_bounds_exp(func)])
+        case FunRef(name, arity):
+          return FunRef(name, arity)
         case _:
           return super().check_bounds_exp(e)
     
     def check_bounds_stmt(self, s: stmt) -> stmt:
         match s:
-          case AnnAssign(target, annotation, value, simple):
-              return [AnnAssign(self.check_bounds_exp(target),
-                               annotation,
-                               self.check_bounds_exp(value),
-                               simple)]
+          case FunctionDef(name, params, body, _, returns, _):
+              new_bodys = [self.check_bounds_stmt(s) for s in body]
+              return [FunctionDef(name, params, sum(new_bodys, []), None,
+                                  returns, None)]
+          case Return(value):
+              return [Return(self.check_bounds_exp(value))]
           case _:
               return super().check_bounds_stmt(s)
             
     ############################################################################
     # Shrink
     ############################################################################
-    def shrink_exp(self, e: expr) -> expr:
-       match e:
-            case ast.Lambda(params, body):
-                return ast.Lambda(params, self.shrink_exp(body))
-            case Call(Name('arity'), [func]):
-                return Call(Name('arity'), [self.shrink_exp(func)])
-            case _:
-                return super().shrink_exp(e)
     
     def shrink_stmt(self, s: stmt) -> stmt:
         match s:
-            case AnnAssign(target, annotation, value, simple): # AnnAssign(var, type, exp, 0)
-                return AnnAssign(
-                   self.shrink_exp(target),
-                   annotation,
-                   self.shrink_exp(value),
-                   simple)
+            case FunctionDef(name, params, body, _, returns, _):
+                new_body = [self.shrink_stmt(s) for s in body]
+                return FunctionDef(name, params, new_body, None, returns, None)
+            case Return(value):
+                return Return(self.shrink_exp(value))
             case _:
                 return super().shrink_stmt(s)
 
@@ -110,166 +97,73 @@ class Compiler(functions.Functions):
                 return Module(funs + [main])
 
     ############################################################################
-    # uniquify
-    ############################################################################
-    no_uniquify_functions = builtin_functions.copy()
-    def uniquify_exp(self, e: expr, env: dict) -> expr:
-        print(f"e is {e}, etype is {type(e)}")
-        match e:
-            case Name(id):
-                # Replace the name with its unique version if it's in the map
-                if id in env.keys():
-                    # if variable already appears
-                    new_id = env.get(id, id)
-                elif id in self.no_uniquify_functions:
-                    # some functions that do not need uniquify
-                    env[id] = id
-                    new_id = env.get(id, id)
-                else:
-                    # if it is a new variable
-                    new_id = generate_name(id)
-                    env[id] = new_id
-                return Name(new_id, e.ctx)
-            case FunRef(name, arity):
-                # I think 'arity' already includes the id
-                # How to update the arity?
-                env[name] = generate_name(name)
-                return FunRef(name, name_id)
-            case Constant(value):
-                return Constant(value)
-            case Lambda(param, body):
-                # Process lambda parameters and body
-                new_param, new_env = self.uniquify_params(param, env, "lambda")
-                new_body = self.uniquify_exp(body, new_env)
-                return Lambda(new_param, new_body)
-            case Call(func, args):
-                # Process function call
-                new_func = self.uniquify_exp(func, env)
-                new_args = [self.uniquify_exp(arg, env) for arg in args]
-                return Call(new_func, new_args)
-            case UnaryOp(op, operand):
-                return UnaryOp(op, self.uniquify_exp(operand, env))
-            case BinOp(left, op, right):
-                return BinOp(self.uniquify_exp(left, env),
-                             op,
-                             self.uniquify_exp(right, env))
-            case Compare(left, ops, comparators):
-                return Compare(self.uniquify_exp(left, env),
-                               ops,
-                               [self.uniquify_exp(s, env) for s in comparators])
-            case IfExp(test, body, orelse):
-                return IfExp(self.uniquify_exp(test, env),
-                             self.uniquify_exp(body, env),
-                             self.uniquify_exp(orelse, env))
-            case ast.Tuple(elts, ctx):
-                return ast.Tuple([self.uniquify_exp(s, env) for s in elts],
-                                 ctx)
-            case Subscript(value, slices, ctx):
-                return Subscript(self.uniquify_exp(value, env),
-                                 slices,
-                                 ctx)
-            case _:
-                # Add more cases as needed for other expression types
-                raise Exception(f"unhandle expr {e}")
-
-    def uniquify_params(self, params, env: dict, func_type: str) -> tuple:
-        # lambda and function defination has different params
-        new_env = env.copy()
-        if func_type == 'lambda':
-            new_params = []
-            for name in params:
-                new_name = generate_name(name)
-                new_env[name] = new_name
-                new_params.append(new_name)
-        if func_type == 'function_def':
-            # Tuple-based parameters
-            new_params = []
-            for name, type_ in params:
-                new_name = generate_name(name)
-                new_env[name] = new_name
-                new_params.append((new_name, type_))
-        return new_params, new_env
-        
-    # Do we need to check if the parameters are free or not?
-    def uniquify_arg(self, arg: ast.arg, env: dict) -> ast.arg:
-        if arg is None:
-            return None
-        new_name = generate_name(arg.arg)
-        env[arg.arg] = new_name
-        return ast.arg(new_name, arg.annotation)
-
-    def uniquify_def(self, d: FunctionDef, env) -> ast.FunctionDef:
-        match d:
-            case ast.FunctionDef(name, params, body, decorator_list, returns, type_comment):
-                # Process function definition
-                new_params, new_env = self.uniquify_params(params, env, "function_def")
-                new_body = [self.uniquify_stmt(stmt, new_env) for stmt in body]
-                return ast.FunctionDef(name, new_params, new_body, decorator_list, returns, type_comment)
-    
-    def uniquify_stmt(self, s: ast.stmt, env: dict) -> ast.stmt:
-        print(f"stmt is {s}, stmt type is {type(s)}")
-        match s:
-            case ast.AnnAssign(target, annotation, value, simple):
-                # Process annotated assignment
-                new_target = self.uniquify_exp(target, env)
-                new_value = self.uniquify_exp(value, env)
-                return ast.AnnAssign(new_target, annotation, new_value, simple)
-            case ast.If(test, body, orelse):
-                # Process if statement
-                new_test = self.uniquify_exp(test, env)
-                new_body = [self.uniquify_stmt(stmt, env) for stmt in body]
-                new_orelse = [self.uniquify_stmt(stmt, env) for stmt in orelse]
-                return ast.If(new_test, new_body, new_orelse)
-            case ast.Return(value):
-                # Process return statement
-                new_value = self.uniquify_exp(value, env) if value is not None else None
-                return ast.Return(new_value)
-            case ast.Expr(value):
-                # Process expression statement
-                new_value = self.uniquify_exp(value, env)
-                return ast.Expr(new_value)
-            case While(test, body, orelse):
-                return While(self.uniquify_exp(test, env),
-                             [self.uniquify_stmt(s, env) for s in body],
-                             [self.uniquify_stmt(s, env) for s in orelse])
-            case Assign(targets, value):
-                return Assign([self.uniquify_exp(e, env) for e in targets],
-                              self.uniquify_exp(value, env))
-            case _:
-                # Add more cases as needed for other statement types
-                raise Exception(f"Unhandle stmt {s}")
-           
-    def uniquify(self, p: ast.Module) -> ast.Module:
-        res = []
-        for d in p.body:
-            self.no_uniquify_functions.add(d.name) # first scan: add definations
-        for d in p.body:
-            env = {}
-            res.append(self.uniquify_def(d, env))
-        return Module(res)
-
-    
-    ############################################################################
     # Reveal Functions
     ############################################################################
 
-    # change all Name('func') to FunRef('func', arity)
     def reveal_funs_exp(self, e: expr, funs) -> expr:
         match e:
-            case ast.Lambda(params, body):
-                return ast.Lambda(params, self.reveal_funs_exp(body, funs))
+            case Name(id):
+              if id in funs.keys():
+                return FunRef(id, funs[id])
+              else:
+                return e
+            case Constant(value):
+                return e
+            case BinOp(left, op, right):
+                l = self.reveal_funs_exp(left, funs)
+                r = self.reveal_funs_exp(right, funs)
+                return BinOp(l, op, r)
+            case UnaryOp(op, operand):
+                rand = self.reveal_funs_exp(operand, funs)
+                return UnaryOp(op, rand)
+            case Call(func, args):
+                new_func = self.reveal_funs_exp(func, funs)
+                new_args = [self.reveal_funs_exp(arg, funs) for arg in args]
+                return Call(new_func, new_args)
+            case IfExp(test, body, orelse):
+                tst = self.reveal_funs_exp(test, funs)
+                bod = self.reveal_funs_exp(body, funs)
+                els = self.reveal_funs_exp(orelse, funs)
+                return IfExp(tst, bod, els)
+            case Compare(left, [op], [right]):
+                l = self.reveal_funs_exp(left, funs)
+                r = self.reveal_funs_exp(right, funs)
+                return Compare(l, [op], [r])
+            case ast.Tuple(es, kind):
+                new_es = [self.reveal_funs_exp(e, funs) for e in es]
+                return ast.Tuple(new_es, kind)
+            case ast.List(es, kind):
+                new_es = [self.reveal_funs_exp(e, funs) for e in es]
+                return ast.List(new_es, kind)
+            case Subscript(tup, index, kind):
+                return Subscript(self.reveal_funs_exp(tup, funs),
+                                 self.reveal_funs_exp(index, funs),
+                                 kind)
             case _:
-                return super().reveal_funs_exp(e, funs)
+                raise Exception('reveal_funs_exp: unexpected: ' + repr(e))
       
     def reveal_funs_stmt(self, s: stmt, funs) -> stmt:
         match s:
-            case ast.AnnAssign(target, annotation, value, simple):
-                return ast.AnnAssign(self.reveal_funs_exp(target, funs),
-                                     annotation,
-                                     self.reveal_funs_exp(value, funs),
-                                     simple)
+            case Assign(targets, value):
+                return Assign([self.reveal_funs_exp(e, funs) for e in targets],
+                              self.reveal_funs_exp(value, funs))
+            case Expr(value):
+                return Expr(self.reveal_funs_exp(value, funs))
+            case If(test, body, orelse):
+                return If(self.reveal_funs_exp(test, funs),
+                          [self.reveal_funs_stmt(s, funs) for s in body],
+                          [self.reveal_funs_stmt(s, funs) for s in orelse])
+            case While(test, body, []):
+                return While(self.reveal_funs_exp(test, funs),
+                             [self.reveal_funs_stmt(s, funs) for s in body],
+                             [])
+            case FunctionDef(name, params, body, None, returns, None):
+                new_body = [self.reveal_funs_stmt(s, funs) for s in body]
+                return FunctionDef(name, params, new_body, None, returns, None)
+            case Return(value):
+                return Return(self.reveal_funs_exp(value, funs))
             case _:
-                return super().reveal_funs_stmt(s, funs)
+                raise Exception('reveal_funs_stmt: unexpected: ' + repr(s))
         
     def reveal_functions(self, p: Module) -> Module:
         match p:
@@ -279,161 +173,6 @@ class Compiler(functions.Functions):
               if isinstance(s, FunctionDef):
                 funs[s.name] = len(s.args)
             return Module([self.reveal_funs_stmt(s, funs) for s in body])
-    
-    ############################################################################
-    # Convert Assignments
-    ############################################################################
-    def free_variables(self, e: expr, bound_vars: set) -> set:
-        match e:
-            case Name(id):
-                if id not in bound_vars:
-                    return {id}
-                else:
-                    return set()
-            case Constant(Value):
-                return set()
-            case FunRef(name, arity):
-                return set()
-            case Call(func, args):
-                func_free_vars = self.free_variables(func, bound_vars)
-                args_free_vars = set().union(*(self.free_variables(arg, bound_vars) for arg in args))
-                return func_free_vars.union(args_free_vars)
-            case BinOp(left, op, right):
-                left_free_vars = self.free_variables(left, bound_vars)
-                right_free_vars = self.free_variables(right, bound_vars)
-                return left_free_vars.union(right_free_vars)
-            case UnaryOp(op, operand):
-                return self.free_variables(operand, bound_vars)
-            case ast.Tuple(elts, ctx):
-                return set().union()(*(self.free_variables(el, bound_vars) for el in elts))
-            case ast.Subscript(value, slice, ctx):
-                return self.free_variables(value)
-            case Lambda(args, body):
-                new_bound_vars = bound_vars.union({arg.arg for arg in args.args})
-                return self.free_variables(body, new_bound_vars)
-            case _:
-                # Recursively handle other expression types (e.g., Call, BinOp, etc.)
-                # Collect free variables from subexpressions and return their union
-                pass
-
-    def free_in_lambda(self, l: ast.Lambda) -> set:
-        return self.free_variables(l)
-
-    def assigned_vars_stmt(self, s: stmt) -> set:
-        match s:
-            case Assign(targets, _):
-                return {t.id for t in targets if isinstance(t, Name)}
-            case _:
-                # Recursively handle other statement types
-                # For compound statements (e.g., If, For), collect assigned vars from substatements
-                return set()
-    
-    def transform_exp(self, e: expr, boxed_vars: set) -> expr:
-        match e:
-            case Name(id) if id in boxed_vars:
-                # Replace read from boxed variable with tuple read
-                return Subscript(Name(id), Constant(0), Load())
-            case Name(id):
-                return Name(id)
-            case Lambda(args, body):
-                # Transform lambda body
-                return Lambda(args, self.transform_exp(body, boxed_vars))
-            case Constant(value):
-                return Constant(value)
-            case FunRef(name, arity):
-                return FunRef(name, arity)
-            case BinOp(left, op, right):
-                return BinOp(self.transform_exp(left, boxed_vars),
-                             op,
-                             self.transform_exp(right, boxed_vars))
-            case UnaryOp(op, operand):
-                return UnaryOp(op, self.transform_exp(operand, boxed_vars))
-            case Call(func, args):
-                return Call(self.transform_exp(func, boxed_vars), [self.transform_exp(a, boxed_vars) for a in args])
-            case Compare(left, ops, comparators):
-                return Compare(self.transform_exp(left, boxed_vars),
-                               ops,
-                               [self.transform_exp(s, boxed_vars) for s in comparators])
-            case IfExp(test, body, orelse):
-                return IfExp(self.transform_exp(test, boxed_vars),
-                             self.transform_exp(body, boxed_vars),
-                             self.transform_exp(orelse, boxed_vars))
-            case Tuple(elts, ctx):
-                return Tuple([self.transform_exp(el, boxed_vars) for el in elts], ctx)
-            case Subscript(value, slice, ctx):
-                return Subscript(self.transform_exp(value, boxed_vars), slice, ctx)
-            case _:
-                raise Exception("Unhandle transform, ",e)
-    def transform_stmt(self, s: stmt, boxed_vars: set) -> stmt:
-        match s:
-            case AnnAssign(target, annotations, value, simple):
-                return AnnAssign(self.transform_exp(target, boxed_vars),
-                                 annotations,
-                                 self.transform_exp(value, boxed_vars),
-                                 simple)
-            case Assign(targets, value):
-                # Transform the right-hand side of the assignment
-                new_value = self.transform_exp(value, boxed_vars)
-                new_targets = [self.transform_exp(t, boxed_vars) for t in targets]
-                return Assign(new_targets, new_value)
-            case Return(value):
-                # Transform the return value
-                return Return(self.transform_exp(value, boxed_vars))
-            case Expr(value):
-                # Transform the expression
-                return Expr(self.transform_exp(value, boxed_vars))
-            case If(test, body, orelse):
-                # Transform the test expression and the bodies of the if and else branches
-                new_test = self.transform_exp(test, boxed_vars)
-                new_body = [self.transform_stmt(stmt, boxed_vars) for stmt in body]
-                new_orelse = [self.transform_stmt(stmt, boxed_vars) for stmt in orelse]
-                return If(new_test, new_body, new_orelse)
-            case While(test, body, orelse):
-                new_test = self.transform_exp(test, boxed_vars)
-                new_body = [self.transform_stmt(stmt, boxed_vars) for stmt in body]
-                new_orelse = [self.transform_stmt(stmt, boxed_vars) for stmt in orelse]
-                return While(new_test, new_body, new_orelse)
-            case _:
-                # Recursively handle other statement types
-                # For compound statements (e.g., For, While), transform substatements
-                raise Exception("Unhandle transform, ", s)
-
-
-    def convert_assignments_def(self, d: FunctionDef) -> FunctionDef:
-        # Step 1: Identify variables to box
-        free_vars = set()  # Collect free variables in lambdas
-        assigned_vars = set()  # Collect assigned variables in the function
-        for s in d.body:
-            if isinstance(s, ast.Lambda):
-                free_vars.update(self.free_in_lambda(s))
-            elif isinstance(s, ast.Assign):
-                assigned_vars.update(self.assigned_vars_stmt(s))
-        vars_to_box = free_vars.intersection(assigned_vars)
-
-        # Step 2: Transform the FunctionDef
-        new_body = []
-        if vars_to_box:
-            # Initialize the tuple for boxed variables
-            tuple_init = Assign([Name("env")], Tuple([Name("uninitialized(var)") for _ in vars_to_box], Load()))
-            new_body.append(tuple_init)
-
-        for stmt in d.body:
-            new_body.append(self.transform_stmt(stmt, vars_to_box))
-
-        return FunctionDef(d.name, d.args, new_body, d.decorator_list, d.returns, d.type_comment)
-    
-    def convert_assignments(self, p: Module) -> Module:
-        res = []
-        match p:
-            case Module(body):
-                for s in body:
-                    if isinstance(s, FunctionDef):
-                        res.append(self.convert_assignments_def(s))
-        return Module(res)
-
-    ############################################################################
-    # Convert to closures
-    ############################################################################
     
     ############################################################################
     # Limit Functions
@@ -747,14 +486,14 @@ class Compiler(functions.Functions):
     # Uncover Live
     ###########################################################################
 
-    def vars_arg(self, a: arg) -> set[location]:
+    def vars_arg(self, a: arg) -> Set[location]:
         match a:
             case FunRef(id, arity): # todo: delete? changed to Global
                 return {}
             case _:
                 return super().vars_arg(a)
             
-    def read_vars(self, i: instr) -> set[location]:
+    def read_vars(self, i: instr) -> Set[location]:
         match i:
             case Instr('leaq', [s, t]):
                 return self.vars_arg(s)
@@ -767,7 +506,7 @@ class Compiler(functions.Functions):
             case _:
                 return super().read_vars(i)
 
-    def write_vars(self, i: instr) -> set[location]:
+    def write_vars(self, i: instr) -> Set[location]:
         match i:
             case Instr('leaq', [s, t]): # being extra explicit here -Jeremy
                 return self.vars_arg(t)
@@ -792,7 +531,7 @@ class Compiler(functions.Functions):
     ###########################################################################
 
     def interfere_instr(self, i: instr, graph: UndirectedAdjList,
-                        live_after: Dict[instr, set[location]]):
+                        live_after: Dict[instr, Set[location]]):
         match i:
             case IndirectCallq(func, n) if func not in builtin_functions:
                 for v in live_after[i]:
@@ -813,14 +552,14 @@ class Compiler(functions.Functions):
     # Assign Homes
     ############################################################################
 
-    def collect_locals_arg(self, a: arg) -> set[location]:
+    def collect_locals_arg(self, a: arg) -> Set[location]:
         match a:
             case FunRef(id, arity):
                 return set()
             case _:
                 return super().collect_locals_arg(a)
             
-    def collect_locals_instr(self, i: instr) -> set[location]:
+    def collect_locals_instr(self, i: instr) -> Set[location]:
         match i:
             case IndirectCallq(func, arity):
                 return set()
@@ -980,3 +719,34 @@ class Compiler(functions.Functions):
               for (l,ss) in bs.items():
                   blocks[l] = ss
           return X86Program(blocks)
+
+
+typecheck_Lfun = type_check_Lfun.TypeCheckLfun().type_check
+typecheck_Cfun = type_check_Cfun.TypeCheckCfun().type_check
+typecheck_dict = {
+    'source': typecheck_Lfun,
+    'resolve': typecheck_Lfun,
+    'check_bounds': typecheck_Lfun,
+    'shrink': typecheck_Lfun,
+    'reveal_functions': typecheck_Lfun,
+    'convert_assignments': typecheck_Lfun,
+    'convert_to_closures': typecheck_Lfun,
+    'limit_functions': typecheck_Lfun,
+    'expose_allocation': typecheck_Lfun,
+    'remove_complex_operands': typecheck_Lfun,
+    'explicate_control': typecheck_Cfun,
+}
+interpLfun = interp_Lfun.InterpLfun().interp
+interpCfun = interp_Cfun.InterpCfun().interp
+interp_dict = {
+    'resolve': interpLfun,
+    'check_bounds': interpLfun,
+    'shrink': interpLfun,
+    'reveal_functions': interpLfun,
+    'convert_assignments': interpLfun,
+    'convert_to_closures': interpLfun,
+    'limit_functions': interpLfun,
+    'expose_allocation': interpLfun,
+    'remove_complex_operands': interpLfun,
+    'explicate_control': interpCfun,
+}

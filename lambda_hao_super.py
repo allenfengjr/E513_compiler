@@ -4,7 +4,7 @@ from utils import *
 from x86_ast import *
 import functions
 import typing
-from typing import List, Dict
+from typing import List, Dict, Set
 from var import Temporaries
 from register_allocator import arg_registers, caller_save_for_alloc, \
     registers, callee_save_for_alloc
@@ -283,20 +283,20 @@ class Compiler(functions.Functions):
     ############################################################################
     # Convert Assignments
     ############################################################################
-    def free_variables(self, e: expr, bound_vars: set) -> set:
+    def free_variables(self, e: expr, bound_vars: Set) -> Set:
         match e:
             case Name(id):
                 if id not in bound_vars:
                     return {id}
                 else:
-                    return set()
+                    return Set()
             case Constant(Value):
-                return set()
+                return Set()
             case FunRef(name, arity):
-                return set()
+                return Set()
             case Call(func, args):
                 func_free_vars = self.free_variables(func, bound_vars)
-                args_free_vars = set().union(*(self.free_variables(arg, bound_vars) for arg in args))
+                args_free_vars = Set().union(*(self.free_variables(arg, bound_vars) for arg in args))
                 return func_free_vars.union(args_free_vars)
             case BinOp(left, op, right):
                 left_free_vars = self.free_variables(left, bound_vars)
@@ -305,7 +305,7 @@ class Compiler(functions.Functions):
             case UnaryOp(op, operand):
                 return self.free_variables(operand, bound_vars)
             case ast.Tuple(elts, ctx):
-                return set().union()(*(self.free_variables(el, bound_vars) for el in elts))
+                return Set().union()(*(self.free_variables(el, bound_vars) for el in elts))
             case ast.Subscript(value, slice, ctx):
                 return self.free_variables(value)
             case Lambda(args, body):
@@ -316,61 +316,40 @@ class Compiler(functions.Functions):
                 # Collect free variables from subexpressions and return their union
                 pass
 
-    def free_in_lambda(self, l: ast.Lambda) -> set:
+    def free_in_lambda(self, l: ast.Lambda) -> Set:
         return self.free_variables(l)
 
-    def assigned_vars_stmt(self, s: stmt) -> set:
+    def assigned_vars_stmt(self, s: stmt) -> Set:
         match s:
             case Assign(targets, _):
                 return {t.id for t in targets if isinstance(t, Name)}
             case _:
                 # Recursively handle other statement types
                 # For compound statements (e.g., If, For), collect assigned vars from substatements
-                return set()
+                return Set()
     
-    def transform_exp(self, e: expr, boxed_vars: set) -> expr:
+    def transform_exp(self, e: expr, boxed_vars: Set) -> expr:
         match e:
             case Name(id) if id in boxed_vars:
                 # Replace read from boxed variable with tuple read
                 return Subscript(Name(id), Constant(0), Load())
-            case Name(id):
-                return Name(id)
             case Lambda(args, body):
                 # Transform lambda body
                 return Lambda(args, self.transform_exp(body, boxed_vars))
-            case Constant(value):
-                return Constant(value)
-            case FunRef(name, arity):
-                return FunRef(name, arity)
-            case BinOp(left, op, right):
-                return BinOp(self.transform_exp(left, boxed_vars),
-                             op,
-                             self.transform_exp(right, boxed_vars))
-            case UnaryOp(op, operand):
-                return UnaryOp(op, self.transform_exp(operand, boxed_vars))
             case Call(func, args):
-                return Call(self.transform_exp(func, boxed_vars), [self.transform_exp(a, boxed_vars) for a in args])
+                return Call(self.transform_exp(func), [self.transform_exp(a) for a in args])
             case Compare(left, ops, comparators):
-                return Compare(self.transform_exp(left, boxed_vars),
+                return Compare(self.transform_exp(left),
                                ops,
-                               [self.transform_exp(s, boxed_vars) for s in comparators])
+                               [self.transform_exp(s) for s in comparators])
             case IfExp(test, body, orelse):
-                return IfExp(self.transform_exp(test, boxed_vars),
-                             self.transform_exp(body, boxed_vars),
-                             self.transform_exp(orelse, boxed_vars))
-            case Tuple(elts, ctx):
-                return Tuple([self.transform_exp(el, boxed_vars) for el in elts], ctx)
-            case Subscript(value, slice, ctx):
-                return Subscript(self.transform_exp(value, boxed_vars), slice, ctx)
+                return IfExp(self.transform_exp(test),
+                             self.transform_exp(body),
+                             self.transform_exp(orelse))            
             case _:
-                raise Exception("Unhandle transform, ",e)
-    def transform_stmt(self, s: stmt, boxed_vars: set) -> stmt:
+                raise Exception("Unhandle transform")
+    def transform_stmt(self, s: stmt, boxed_vars: Set) -> stmt:
         match s:
-            case AnnAssign(target, annotations, value, simple):
-                return AnnAssign(self.transform_exp(target, boxed_vars),
-                                 annotations,
-                                 self.transform_exp(value, boxed_vars),
-                                 simple)
             case Assign(targets, value):
                 # Transform the right-hand side of the assignment
                 new_value = self.transform_exp(value, boxed_vars)
@@ -396,13 +375,12 @@ class Compiler(functions.Functions):
             case _:
                 # Recursively handle other statement types
                 # For compound statements (e.g., For, While), transform substatements
-                raise Exception("Unhandle transform, ", s)
-
+                pass
 
     def convert_assignments_def(self, d: FunctionDef) -> FunctionDef:
         # Step 1: Identify variables to box
-        free_vars = set()  # Collect free variables in lambdas
-        assigned_vars = set()  # Collect assigned variables in the function
+        free_vars = Set()  # Collect free variables in lambdas
+        assigned_vars = Set()  # Collect assigned variables in the function
         for s in d.body:
             if isinstance(s, ast.Lambda):
                 free_vars.update(self.free_in_lambda(s))
@@ -434,7 +412,16 @@ class Compiler(functions.Functions):
     ############################################################################
     # Convert to closures
     ############################################################################
-    
+    def convert_to_closures_exp(self, e: expr) -> expr:
+        match e:
+            case Lambda(param, body):
+                return Closure()
+            case _:
+                raise Exception("Unhandle expr, ", e)
+    def convert_to_closures_stmt(self, s: stmt) -> stmt:
+        return
+    def convert_to_closures(self, p: Module) -> Module:
+        return 
     ############################################################################
     # Limit Functions
     ############################################################################
@@ -747,14 +734,14 @@ class Compiler(functions.Functions):
     # Uncover Live
     ###########################################################################
 
-    def vars_arg(self, a: arg) -> set[location]:
+    def vars_arg(self, a: arg) -> Set[location]:
         match a:
             case FunRef(id, arity): # todo: delete? changed to Global
                 return {}
             case _:
                 return super().vars_arg(a)
             
-    def read_vars(self, i: instr) -> set[location]:
+    def read_vars(self, i: instr) -> Set[location]:
         match i:
             case Instr('leaq', [s, t]):
                 return self.vars_arg(s)
@@ -767,7 +754,7 @@ class Compiler(functions.Functions):
             case _:
                 return super().read_vars(i)
 
-    def write_vars(self, i: instr) -> set[location]:
+    def write_vars(self, i: instr) -> Set[location]:
         match i:
             case Instr('leaq', [s, t]): # being extra explicit here -Jeremy
                 return self.vars_arg(t)
@@ -792,7 +779,7 @@ class Compiler(functions.Functions):
     ###########################################################################
 
     def interfere_instr(self, i: instr, graph: UndirectedAdjList,
-                        live_after: Dict[instr, set[location]]):
+                        live_after: Dict[instr, Set[location]]):
         match i:
             case IndirectCallq(func, n) if func not in builtin_functions:
                 for v in live_after[i]:
@@ -813,14 +800,14 @@ class Compiler(functions.Functions):
     # Assign Homes
     ############################################################################
 
-    def collect_locals_arg(self, a: arg) -> set[location]:
+    def collect_locals_arg(self, a: arg) -> Set[location]:
         match a:
             case FunRef(id, arity):
                 return set()
             case _:
                 return super().collect_locals_arg(a)
             
-    def collect_locals_instr(self, i: instr) -> set[location]:
+    def collect_locals_instr(self, i: instr) -> Set[location]:
         match i:
             case IndirectCallq(func, arity):
                 return set()

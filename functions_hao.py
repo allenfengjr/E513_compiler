@@ -247,12 +247,10 @@ class Compiler(tuples.Tuples):
                 '''
                 why comment this?
                 '''
-                # processed_fdef = self.process_function_def(s, basic_blocks)
-                new_body = []
-                for stmt in reversed(body):
-                    new_body = self.explicate_stmt(stmt, new_body, basic_blocks)
+                processed_fdef = self.process_function_def(s, basic_blocks)
+                
                 # Create a new FunctionDef with the processed body
-                return [FunctionDef(name, params, new_body, dl, returns, comment)] + cont
+                return [processed_fdef] + cont
                 # return [processed_fdef] + cont
             
             case Return(value):
@@ -264,15 +262,12 @@ class Compiler(tuples.Tuples):
     def explicate_control(self, p: Module) -> CProgramDefs:
         match p:
             case Module(body):
+                new_body = [Return(Constant(0))]
                 basic_blocks = {}
-                new_defs = [self.process_function_def(fdef, basic_blocks) for fdef in body] # what is this doing?
-                # 
-                new_defs = []
-                for stmt in body:
-                    if isinstance(stmt, FunctionDef):
-                        new_defs.append(self.explicate_stmt())
-                print("Got CProgramDefs")
-                return CProgramDefs(new_defs)
+                for s in reversed(body):
+                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
+                basic_blocks[label_name('start')] = new_body
+                return CProgramDefs(basic_blocks)
             case _:
                 return super().explicate_control(p)
             
