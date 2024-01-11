@@ -721,32 +721,3 @@ class Functions(arrays.Arrays):
           return X86Program(blocks)
 
 
-typecheck_Lfun = type_check_Lfun.TypeCheckLfun().type_check
-typecheck_Cfun = type_check_Cfun.TypeCheckCfun().type_check
-typecheck_dict = {
-    'source': typecheck_Lfun,
-    'resolve': typecheck_Lfun,
-    'check_bounds': typecheck_Lfun,
-    'shrink': typecheck_Lfun,
-    'reveal_functions': typecheck_Lfun,
-    'convert_assignments': typecheck_Lfun,
-    'convert_to_closures': typecheck_Lfun,
-    'limit_functions': typecheck_Lfun,
-    'expose_allocation': typecheck_Lfun,
-    'remove_complex_operands': typecheck_Lfun,
-    'explicate_control': typecheck_Cfun,
-}
-interpLfun = interp_Lfun.InterpLfun().interp
-interpCfun = interp_Cfun.InterpCfun().interp
-interp_dict = {
-    'resolve': interpLfun,
-    'check_bounds': interpLfun,
-    'shrink': interpLfun,
-    'reveal_functions': interpLfun,
-    'convert_assignments': interpLfun,
-    'convert_to_closures': interpLfun,
-    'limit_functions': interpLfun,
-    'expose_allocation': interpLfun,
-    'remove_complex_operands': interpLfun,
-    'explicate_control': interpCfun,
-}

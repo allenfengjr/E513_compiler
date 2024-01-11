@@ -434,7 +434,168 @@ class Compiler(functions.Functions):
     ############################################################################
     # Convert to closures
     ############################################################################
+    function_return_type = {}
+    # 1. transform lambda
+    def create_top_level_function(self, name: str, lambda_expr: Lambda, free_vars: List[str]) -> FunctionDef:
+        # Create parameters for the new function
+        # The first parameter is the closure ('clos') with a generic type (e.g., Bottom)
+        closure_param = ("clos", Bottom())
+
+        # The new function parameters include the closure and the original lambda parameters
+        func_params = [closure_param] + lambda_expr.args
+
+        # Create the function body, extracting free variables from the closure
+        new_body = []
+        for i, fv in enumerate(free_vars):
+            new_body.append(Assign([Name(fv)], Subscript(Name("clos"), Constant(i + 1), Load())))
+
+        # Add the body of the lambda
+        new_body.append(lambda_expr.body)
+
+        # Create the new function definition
+        return FunctionDef(name, func_params, new_body, [], lambda_expr.body, None)
+
+    def transform_lambda_to_closure(self, lambda_expr: Lambda, free_vars: List[str]) -> Closure:
+        # Generate a unique name for the new top-level function
+        func_name = generate_name("lambda")
+
+        # Create a new top-level function corresponding to the lambda
+        new_func_def = self.create_top_level_function(func_name, lambda_expr, free_vars)
+
+        # Add the new function to the module's body
+        self.module_body.append(new_func_def)
+
+        # Return a Closure node
+        Clos = Closure(len(lambda_expr.args), [FunRef(func_name, len(lambda_expr.args))] + free_vars)
+        Clos.has_type = TupleType([FunctionType([TupleType([])]+[e.has_type for e in lambda_expr.args]), lambda_expr.body])
+        return Clos
+
+    # 2. transform function call
+    def transform_function_call(self, call_expr: Call) -> Expr:
+        # Extract the function from the closure
+        func = Subscript(call_expr.func, Constant(0), Load())
+
+        # Pass the closure as the first argument
+        new_args = [call_expr.func] + call_expr.args
+
+        return Call(func, new_args)
     
+    # 3. transform function reference
+    def transform_fun_ref(self, fun_ref: FunRef) -> Closure:
+        Clos = Closure(fun_ref.arity, [FunRef(fun_ref.name, fun_ref.arity)])
+        print("The closure is, ", Clos, Clos.args)
+        Clos.has_type = TupleType([FunctionType([TupleType([])], self.function_return_type[fun_ref.name])])
+        return Clos
+    def is_closure(self, func_name: str) -> bool:
+        # Check if the function name corresponds to a closure
+        # This method should check if func_name is in the list of functions that have been converted to closures
+        if func_name in self.no_uniquify_functions:
+            return False
+        return True
+    
+    # closure conversion
+    def convert_exp(self, e: expr, free_vars: List[str] = None) -> expr:
+        match e:
+            case Constant(Value):
+                return Constant(Value)
+            case Lambda(args, body):
+                # Transform Lambda into Closure
+                lambda_free_vars = self.free_variables(body, set(arg for arg in args))
+                return self.transform_lambda_to_closure(e, list(lambda_free_vars))
+            case Call(func, args):
+                # Transform function call
+                # Check if the function is a closure
+                if isinstance(func, Name) and self.is_closure(func.id):
+                    new_func = self.convert_exp(func, free_vars)
+                    new_args = [Name("clos")] + [self.convert_exp(arg, free_vars) for arg in args]
+                    return Call(Subscript(new_func, Constant(0), Load()), new_args)
+                else:
+                    new_func = self.convert_exp(func, free_vars)
+                    new_args = [self.convert_exp(arg, free_vars) for arg in args]
+                    return Call(new_func, new_args)
+            case FunRef(name, arity):
+                # Convert FunRef to Closure
+                return self.transform_fun_ref(e)
+            case Name(id):
+                if free_vars and id in free_vars:
+                    # Access free variable from closure
+                    return Subscript(Name("clos"), Constant(free_vars.index(id) + 1), Load())
+                else:
+                    return e
+            case BinOp(left, op, right):
+                # Transform binary operations
+                new_left = self.convert_exp(left, free_vars)
+                new_right = self.convert_exp(right, free_vars)
+                return BinOp(new_left, op, new_right)
+            case UnaryOp(op, opreand):
+                return UnaryOp(op, self.convert_exp(opreand, free_vars))
+            case Compare(left, ops, comparators):
+                return Compare(self.convert_exp(left, free_vars),
+                               ops,
+                               [self.convert_exp(c, free_vars) for c in comparators])
+            case IfExp(test, body, orelse):
+                # Transform conditional expressions
+                new_test = self.convert_exp(test, free_vars)
+                new_body = self.convert_exp(body, free_vars)
+                new_orelse = self.convert_exp(orelse, free_vars)
+                return IfExp(new_test, new_body, new_orelse)
+            case Tuple(elts, ctx):
+                return Tuple([self.convert_exp(el, free_vars) for el in elts], ctx)
+            case Subscript(value, slice, ctx):
+                return Subscript(self.convert_exp(value, free_vars), slice, ctx)
+            case _:
+                # Recursively handle other expression types
+                # For compound expressions (e.g., ListComp, UnaryOp), transform subexpressions
+                raise Exception("Unhandled expression type:", e)
+
+    
+    def convert_stmt(self, s: stmt) -> stmt:
+        match s:
+            case Expr(value):
+                return Expr(self.convert_exp(value))
+            case Assign(targets, value):
+                new_value = self.convert_exp(value)
+                return Assign(targets, new_value)
+            case AnnAssign(target, annotation, value, simple):
+                # Translate AnnAssign to a regular Assign, discarding the annotation
+                new_value = self.convert_exp(value) if value is not None else None
+                return Assign([target], new_value)
+            case Return(value):
+                new_value = self.convert_exp(value) if value is not None else None
+                return Return(new_value)
+            case If(test, body, orelse):
+                new_test = self.convert_exp(test)
+                new_body = [self.convert_stmt(stmt) for stmt in body]
+                new_orelse = [self.convert_stmt(stmt) for stmt in orelse]
+                return If(new_test, new_body, new_orelse)
+            case While(test, body, orelse):
+                new_test = self.convert_exp(test)
+                new_body = [self.convert_stmt(stmt) for stmt in body]
+                new_orelse = [self.convert_stmt(stmt) for stmt in orelse]
+                return While(new_test, new_body, new_orelse)
+            case _:
+                raise Exception("Unhandled statement type:", s)
+
+
+    def convert_function_def(self, d: FunctionDef) -> FunctionDef:
+        new_body = [self.convert_stmt(stmt) for stmt in d.body]
+        return FunctionDef(d.name, d.args, new_body, d.decorator_list, d.returns, d.type_comment)
+    
+    def convert_to_closures(self, p: Module) -> Module:
+        self.module_body = []
+        # first iteration
+        for s in p.body:
+            self.function_return_type[s.name] = s.returns
+        for s in p.body:
+            if isinstance(s, FunctionDef):
+                new_func_def = self.convert_function_def(s)
+                self.module_body.append(new_func_def)
+            else:
+                self.module_body.append(s)
+        for p in self.module_body:
+            print("p is, ", p)
+        return Module(self.module_body)
+
     ############################################################################
     # Limit Functions
     ############################################################################
